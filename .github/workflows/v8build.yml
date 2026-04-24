@@ -1,98 +1,119 @@
 name: V8 Build
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach built artifacts to (e.g. v14.7.173.21)'
+        required: true
+  release:
+    types: [published]
+
+permissions:
+  contents: write  # needed to upload release assets
 
 jobs:
-    build-linux:
-        name: Build V8 for linux ${{ matrix.arch }}
-        strategy:
-            fail-fast: false
-            matrix:
-                arch: [x86_64, arm64]
-        runs-on: ubuntu-22.04
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-              with:
-                  submodules: true
-                  fetch-depth: 1
-            - name: Update depot_tools fetch config
-              run: cd deps/depot_tools && git config --unset-all remote.origin.fetch; git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
-              shell: bash
-            - name: Install g++-aarch64-linux-gnu
-              if: matrix.arch == 'arm64'
-              run: sudo apt update && sudo apt install g++-aarch64-linux-gnu -y
-            - name: Build V8
-              run: cd deps && ./build.py --arch ${{ matrix.arch }}
-            - name: Create PR
-              uses: peter-evans/create-pull-request@v6
-              with:
-                commit-message: Update V8 static library for linux ${{ matrix.arch }}
-                branch-suffix: random
-                delete-branch: true
-                title: V8 static library for linux ${{ matrix.arch }}
-                body: Auto-generated pull request to build V8 for linux ${{ matrix.arch }}
-
-    build-darwin:
-        name: Build V8 for darwin ${{ matrix.arch }}
-        strategy:
-            fail-fast: false
-            matrix:
-                arch: [x86_64, arm64]
-        runs-on: macos-14
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-              with:
-                  submodules: true
-                  fetch-depth: 1
-            - name: Update depot_tools fetch config
-              run: cd deps/depot_tools && git config --unset-all remote.origin.fetch; git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
-              shell: bash
-            - name: Build V8
-              run: cd deps && ./build.py --arch ${{ matrix.arch }}
-            - name: Create PR
-              uses: peter-evans/create-pull-request@v6
-              with:
-                commit-message: Update V8 static library for darwin ${{ matrix.arch }}
-                branch-suffix: random
-                delete-branch: true
-                title: V8 static library for darwin ${{ matrix.arch }}
-                body: Auto-generated pull request to build V8 for darwin ${{ matrix.arch }}
-
-    build-windows:
-        name: Build V8 for windows ${{ matrix.arch }}
-        strategy:
-            fail-fast: false
-            matrix:
-                arch: [x86_64, arm64]
-        runs-on: windows-latest
+  build-linux:
+    name: Build V8 for linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Update depot_tools fetch config
+        run: |
+          cd deps/depot_tools
+          git config --unset-all remote.origin.fetch || true
+          git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
+        shell: bash
+      - name: Install g++-aarch64-linux-gnu
+        if: matrix.arch == 'arm64'
+        run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu
+      - name: Build V8
+        run: cd deps && ./build.py --arch ${{ matrix.arch }}
+      - name: Stage artifact
+        run: cp deps/linux_${{ matrix.arch }}/libv8.a libv8-linux-${{ matrix.arch }}.a
+      - name: Upload to release
         env:
-            DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-              with:
-                  submodules: true
-                  fetch-depth: 1
-            - name: Update depot_tools fetch config
-              run: cd deps/depot_tools && git config --unset-all remote.origin.fetch; git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
-              shell: bash
-            - name: Bootstrap depot_tools
-              shell: cmd
-              run: |
-                cd deps\depot_tools
-                call bootstrap\win_tools.bat
-            - name: Build V8
-              shell: cmd
-              run: |
-                cd deps
-                python build.py --arch ${{ matrix.arch }}
-            - name: Create PR
-              uses: peter-evans/create-pull-request@v6
-              with:
-                commit-message: Update V8 static library for windows ${{ matrix.arch }}
-                branch-suffix: random
-                delete-branch: true
-                title: V8 static library for windows ${{ matrix.arch }}
-                body: Auto-generated pull request to build V8 for windows ${{ matrix.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          gh release upload "$TAG" libv8-linux-${{ matrix.arch }}.a --clobber --repo "$GITHUB_REPOSITORY"
+
+  build-darwin:
+    name: Build V8 for darwin ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Update depot_tools fetch config
+        run: |
+          cd deps/depot_tools
+          git config --unset-all remote.origin.fetch || true
+          git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
+        shell: bash
+      - name: Build V8
+        run: cd deps && ./build.py --arch ${{ matrix.arch }}
+      - name: Stage artifact
+        run: cp deps/darwin_${{ matrix.arch }}/libv8.a libv8-darwin-${{ matrix.arch }}.a
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          gh release upload "$TAG" libv8-darwin-${{ matrix.arch }}.a --clobber --repo "$GITHUB_REPOSITORY"
+
+  build-windows:
+    name: Build V8 for windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+    runs-on: windows-latest
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Update depot_tools fetch config
+        shell: bash
+        run: |
+          cd deps/depot_tools
+          git config --unset-all remote.origin.fetch || true
+          git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
+      - name: Bootstrap depot_tools
+        shell: cmd
+        run: |
+          cd deps\depot_tools
+          call bootstrap\win_tools.bat
+      - name: Build V8
+        shell: cmd
+        run: |
+          cd deps
+          python build.py --arch ${{ matrix.arch }}
+      - name: Stage artifact
+        shell: cmd
+        run: copy deps\windows_${{ matrix.arch }}\v8_monolith.lib v8_monolith-windows-${{ matrix.arch }}.lib
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          gh release upload "$TAG" v8_monolith-windows-${{ matrix.arch }}.lib --clobber --repo "$GITHUB_REPOSITORY"

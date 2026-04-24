@@ -33,7 +33,7 @@ jobs:
                 {
                   echo "pr_branch=v8_upgrade/${version}"
                   echo "pr_commit_message=Upgrade V8 binaries for ${version} version"
-                  echo "pr_body=Auto-generated pull request to upgrade V8 binary for ${version} version. After this PR is open, run the 'V8 Build' workflow on this branch to produce the six per-platform artifact PRs that must land on this branch before it merges to master."
+                  echo "pr_body=Auto-generated PR to upgrade V8 headers to ${version}. After this PR is merged, cut a new GitHub Release with tag v${version}. Publishing the release triggers .github/workflows/v8build.yml, which builds the prebuilt V8 static libraries for all 6 target triples and uploads them as release assets."
                 } >> "$GITHUB_OUTPUT"
             - name: Create PR
               uses: peter-evans/create-pull-request@v6

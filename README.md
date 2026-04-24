@@ -10,6 +10,26 @@
 
 <img src="gopher.jpg" width="200px" alt="V8 Gopher based on original artwork from the amazing Renee French" />
 
+> **This repository is a direct port of [rogchap/v8go](https://github.com/rogchap/v8go)**,
+> maintained by [Robomotion](https://github.com/robomotionio).
+> All credit for the original design, Go API, and the CGo-binding machinery goes to
+> Roger Chapman and the rogchap/v8go contributors. This fork exists to keep the
+> binding current with upstream V8 and to restore Windows support that was dropped
+> upstream in late 2021.
+>
+> **What's different from rogchap/v8go:**
+>
+> - **V8 upgraded to 14.7.173.21** (Chrome 147 stable, April 2026) from rogchap's
+>   last release at V8 11.1.277.13 (April 2023).
+> - **Windows amd64 + arm64 support restored** via clang-cl (V8 upstream removed
+>   MSVC support in September 2024). MinGW-w64 path removed.
+> - **C++20** toolchain throughout (required by V8 14.x).
+> - **libc++** used on Linux (V8 14.x public headers require it for ABI compatibility).
+> - **Prebuilt binaries live as GitHub Release assets**, not in git — fetched via
+>   `scripts/fetch-libv8.go` (see [Fetching the V8 static library](#fetching-the-v8-static-library)).
+>
+> Module path is `github.com/robomotionio/v8go`.
+
 ## Usage
 
 ```go
@@ -189,6 +209,43 @@ Go Reference & more examples: https://pkg.go.dev/github.com/robomotionio/v8go
 If you would like to ask questions about this library or want to keep up-to-date with the latest changes and releases,
 please join the [**#v8go**](https://gophers.slack.com/channels/v8go) channel on Gophers Slack. [Click here to join the Gophers Slack community!](https://invite.slack.golangbridge.org/)
 
+### Fetching the V8 static library
+
+Prebuilt V8 static libraries are NOT committed to this repository — they live as assets
+on the GitHub Release tagged `v<deps/v8_version>`. After `go get`ting v8go, pull the
+right binary for your platform before the first `go build`:
+
+```sh
+go run github.com/robomotionio/v8go/scripts/fetch-libv8.go
+```
+
+or, from a local clone:
+
+```sh
+go run scripts/fetch-libv8.go
+```
+
+The fetcher reads `deps/v8_version`, picks the matching release tag, downloads the
+artifact for the current GOOS/GOARCH, and writes it to `deps/{os}_{arch}/libv8.a`
+(or `v8_monolith.lib` on Windows). Flags: `-tag`, `-os`, `-arch`, `-force`.
+
+### Linux toolchain
+
+Linux consumers must compile cgo with **clang**, not gcc. V8 14.x's public headers use
+`libc++`-namespaced types (`std::optional`, `std::unique_ptr`) across the ABI boundary,
+and the embedder has to link against libc++ too. v8go's bundled libc++ headers are
+configured via `-stdlib=libc++`, which gcc does not accept.
+
+```sh
+export CC=clang
+export CXX=clang++
+go build ./...
+```
+
+Install clang via your package manager (`apt install clang`, `pacman -S clang`, etc.).
+libc++ runtime is merged into the prebuilt `libv8.a`; no separate libc++ install is
+required at build time.
+
 ### Windows
 
 Windows amd64 and arm64 are supported. V8 is built with clang-cl on Windows (Microsoft's MSVC
@@ -205,7 +262,7 @@ objects. This means Go's default MinGW-GCC cgo compiler will *not* work — use 
    go build ./...
    ```
 
-3. `go get github.com/robomotionio/v8go` as usual.
+3. `go get github.com/robomotionio/v8go` as usual, then run `go run github.com/robomotionio/v8go/scripts/fetch-libv8.go`.
 
 MinGW-w64 is not supported.
 
@@ -213,10 +270,12 @@ MinGW-w64 is not supported.
 
 V8 version: see [`deps/v8_version`](deps/v8_version).
 
-In order to make `v8go` usable as a standard Go package, prebuilt static libraries of V8
-are included for Linux, macOS, and Windows. You *should not* require to build V8 yourself.
+Prebuilt static V8 libraries are published as GitHub Release assets for Linux
+(x86_64, arm64), macOS (x86_64, arm64), and Windows (x86_64, arm64). You should not
+need to build V8 yourself unless you're porting to a new platform or upgrading V8.
 
-Due to security concerns of binary blobs hiding malicious code, the V8 binary is built via CI *ONLY*.
+Due to security concerns about binary blobs hiding malicious code, the V8 binary is
+built via CI only (`.github/workflows/v8build.yml`, triggered on release publish).
 
 ## Project Goals
 
