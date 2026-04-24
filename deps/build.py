@@ -212,36 +212,56 @@ def main():
         # .o files into libv8.a here to keep it self-contained. The libc++
         # symbols live in std::__Cr::... so they don't collide with
         # libstdc++'s std::.
+        import glob
         monolith = os.path.join(build_path, "obj", "libv8_monolith.a")
-        libcxx = os.path.join(build_path, "obj", "buildtools",
-                              "third_party", "libc++", "libc++.a")
-        libcxxabi = os.path.join(build_path, "obj", "buildtools",
-                                 "third_party", "libc++abi", "libc++abi.a")
+        # libc++.a and libc++abi.a are produced for the *target*. On native
+        # builds they live at obj/buildtools/third_party/libc++/libc++.a;
+        # on cross-compiles (e.g. darwin arm64 host -> x86_64 target) the
+        # path can shift. Glob to find the target archive (skip any
+        # clang_*_v8_* host-tool subdirs).
+        def find_target_archive(name):
+            matches = []
+            for path in glob.glob(os.path.join(
+                    build_path, "**", "buildtools", "third_party",
+                    name, name + ".a"), recursive=True):
+                # Skip the host-tools mirror (e.g. clang_arm64_v8_x64/...).
+                if "/clang_" in path.replace("\\", "/") and "_v8_" in path:
+                    continue
+                matches.append(path)
+            return matches[0] if matches else None
+
+        libcxx = find_target_archive("libc++")
+        libcxxabi = find_target_archive("libc++abi")
         dest_fn = os.path.join(dest_path, 'libv8.a')
         if os.path.exists(dest_fn):
             os.remove(dest_fn)
         # MRI-scripted archive merge. macOS's BSD ar doesn't support -M, so
         # we always use V8's bundled llvm-ar (also used by V8's own build).
-        # On Linux, GNU ar would also work, but using llvm-ar everywhere
-        # keeps the script uniform.
         llvm_ar = os.path.join(v8_path, "third_party", "llvm-build",
                                "Release+Asserts", "bin", "llvm-ar")
         if not os.path.exists(llvm_ar):
-            # Fallback: system ar must be GNU (Linux). Will fail on macOS.
             llvm_ar = "ar"
-        script = (
-            "CREATE {dest}\n"
-            "ADDLIB {monolith}\n"
-            "ADDLIB {libcxx}\n"
-            "ADDLIB {libcxxabi}\n"
-            "SAVE\n"
-            "END\n"
-        ).format(dest=dest_fn, monolith=monolith,
-                 libcxx=libcxx, libcxxabi=libcxxabi)
-        subprocess.run([llvm_ar, "-M"], input=script, text=True,
-                       check=True)
-        # llvm-ar writes a symbol index by default; ranlib pass is only
-        # needed for tools that don't. Skip here; the archive is usable as-is.
+        if libcxx and libcxxabi:
+            print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
+                  "into libv8.a")
+            script = (
+                "CREATE {dest}\n"
+                "ADDLIB {monolith}\n"
+                "ADDLIB {libcxx}\n"
+                "ADDLIB {libcxxabi}\n"
+                "SAVE\n"
+                "END\n"
+            ).format(dest=dest_fn, monolith=monolith,
+                     libcxx=libcxx, libcxxabi=libcxxabi)
+            subprocess.run([llvm_ar, "-M"], input=script, text=True,
+                           check=True)
+        else:
+            # No separate libc++ produced (likely a cross-compile config that
+            # already bundles libc++ into v8_monolith). Just copy the monolith.
+            print("libc++/libc++abi target archives not found; "
+                  "copying v8_monolith.a as-is to libv8.a")
+            shutil.copy(monolith, dest_fn)
+        # llvm-ar writes a symbol index by default; no separate ranlib pass.
 
 
 if __name__ == "__main__":
