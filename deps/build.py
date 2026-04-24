@@ -150,10 +150,17 @@ def main():
     v8deps()
     apply_local_patches()
 
-    gn_path = os.path.join(tools_path, "gn" + (".exe" if is_windows else ""))
-    assert(os.path.exists(gn_path))
-    ninja_path = os.path.join(tools_path, "ninja" + (".exe" if is_windows else ""))
-    assert(os.path.exists(ninja_path))
+    # On Windows depot_tools ships gn/ninja as .bat wrappers that shell out to
+    # the cipd-installed binaries; on Linux/macOS it ships posix shell wrappers
+    # with no extension. There is no `gn.exe` at the root.
+    gn_path = os.path.join(tools_path, "gn.bat" if is_windows else "gn")
+    assert os.path.exists(gn_path), f"gn not found at {gn_path}"
+    ninja_path = os.path.join(tools_path, "ninja.bat" if is_windows else "ninja")
+    if not os.path.exists(ninja_path) and is_windows:
+        # Older depot_tools on Windows had `ninja.exe` directly; newer switched
+        # to a bat wrapper. Fall back if needed.
+        ninja_path = os.path.join(tools_path, "ninja.exe")
+    assert os.path.exists(ninja_path), f"ninja not found at {ninja_path}"
 
     build_path = os.path.join(deps_path, ".build", os_arch())
     env = os.environ.copy()
