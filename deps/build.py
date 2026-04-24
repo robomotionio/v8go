@@ -53,7 +53,7 @@ target_cpu="%s"
 v8_target_cpu="%s"
 target_os="%s"
 clang_use_chrome_plugins=false
-use_custom_libcxx=false
+use_custom_libcxx=true
 use_sysroot=%s
 symbol_level=%s
 strip_debug_info=%s
@@ -67,6 +67,8 @@ v8_enable_i18n_support=true
 icu_use_data_file=false
 v8_enable_test_features=false
 exclude_unwind_tables=true
+v8_enable_sandbox=false
+use_lld=false
 """
 
 def v8deps():
@@ -118,9 +120,12 @@ def main():
     # V8 14.x only builds with clang on all platforms (MSVC support was removed
     # in Sept 2024, so Windows uses clang-cl via is_clang=true).
     is_clang = 'true' if (args.clang or is_windows) else 'false'
-    # Chromium sysroot is only used for Linux cross-compile; macOS uses the
-    # Xcode SDK and Windows uses the MSVC SDK discovered by clang-cl.
-    use_sysroot = 'true' if platform.system().lower() == "linux" else 'false'
+    # Always use the host/cross toolchain headers rather than Chromium's
+    # sysroot. The debian_bullseye sysroot's libstdc++ lacks C++20 features
+    # (std::bit_cast) that V8 14.x source uses. Linux arm64 cross builds
+    # install g++-aarch64-linux-gnu which provides a modern libstdc++; macOS
+    # uses the Xcode SDK; Windows uses the MSVC SDK via clang-cl.
+    use_sysroot = 'false'
     # symbol_level = 1 includes line number information
     # symbol_level = 2 can be used for additional debug information, but it can increase the
     #   compiled library by an order of magnitude and further slow down compilation
