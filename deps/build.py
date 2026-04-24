@@ -68,7 +68,7 @@ icu_use_data_file=false
 v8_enable_test_features=false
 exclude_unwind_tables=true
 v8_enable_sandbox=false
-use_lld=false
+v8_enable_temporal_support=false
 """
 
 def v8deps():
@@ -85,6 +85,29 @@ def v8deps():
 
 def cmd(args):
     return ["cmd", "/c"] + args if is_windows else args
+
+def apply_local_patches():
+    """Apply v8go local patches that gclient sync would otherwise reset.
+
+    These are tracked here (not as .patch files) because they are small,
+    targeted, and the set is expected to shrink as V8 upstream evolves.
+    Any patch added here must be idempotent (safe to apply multiple times).
+    """
+    # Disable ELF CREL relocations. V8 14.x (with lld) emits CREL via
+    # -Wa,--crel,--allow-experimental-crel. The system GNU ld that cgo uses
+    # cannot read CREL. Strip the flag so the monolith archive stays
+    # linkable by downstream toolchains.
+    if not is_windows:
+        path = os.path.join(v8_path, "build", "config", "compiler", "BUILD.gn")
+        with open(path, "r") as f:
+            src = f.read()
+        marker = 'cflags += [ "-Wa,--crel,--allow-experimental-crel" ]'
+        if marker in src:
+            src = src.replace(
+                marker,
+                '# v8go: CREL disabled, see deps/build.py apply_local_patches()')
+            with open(path, "w") as f:
+                f.write(src)
 
 def os_arch():
     u = platform.uname()
@@ -105,6 +128,7 @@ def target_os():
 
 def main():
     v8deps()
+    apply_local_patches()
 
     gn_path = os.path.join(tools_path, "gn" + (".exe" if is_windows else ""))
     assert(os.path.exists(gn_path))
@@ -149,13 +173,39 @@ def main():
         os.makedirs(dest_path)
 
     if is_windows:
-        # On Windows the monolith is an MSVC COFF static archive.
+        # On Windows the monolith is an MSVC COFF static archive. libc++ is
+        # statically merged into v8_monolith.lib by the Windows build.
         lib_fn = os.path.join(build_path, "obj", "v8_monolith.lib")
         dest_fn = os.path.join(dest_path, 'v8_monolith.lib')
+        shutil.copy(lib_fn, dest_fn)
     else:
-        lib_fn = os.path.join(build_path, "obj/libv8_monolith.a")
+        # V8's bundled libc++ and libc++abi live in separate archives that
+        # v8_monolith links against at final-binary link time. v8go's
+        # consumers link with system libstdc++, so we bundle the libc++
+        # .o files into libv8.a here to keep it self-contained. The libc++
+        # symbols live in std::__Cr::... so they don't collide with
+        # libstdc++'s std::.
+        monolith = os.path.join(build_path, "obj", "libv8_monolith.a")
+        libcxx = os.path.join(build_path, "obj", "buildtools",
+                              "third_party", "libc++", "libc++.a")
+        libcxxabi = os.path.join(build_path, "obj", "buildtools",
+                                 "third_party", "libc++abi", "libc++abi.a")
         dest_fn = os.path.join(dest_path, 'libv8.a')
-    shutil.copy(lib_fn, dest_fn)
+        if os.path.exists(dest_fn):
+            os.remove(dest_fn)
+        # ar -M is a scripted interface that concatenates archives.
+        script = (
+            "CREATE {dest}\n"
+            "ADDLIB {monolith}\n"
+            "ADDLIB {libcxx}\n"
+            "ADDLIB {libcxxabi}\n"
+            "SAVE\n"
+            "END\n"
+        ).format(dest=dest_fn, monolith=monolith,
+                 libcxx=libcxx, libcxxabi=libcxxabi)
+        subprocess.run(["ar", "-M"], input=script, text=True,
+                       check=True)
+        subprocess.run(["ranlib", dest_fn], check=True)
 
 
 if __name__ == "__main__":
