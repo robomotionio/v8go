@@ -4,10 +4,10 @@ version: 2
 cli:
   server: https://app.fossa.com
   fetcher: custom
-  project: git@github.com:rogchap/v8go.git
+  project: git@github.com:robomotionio/v8go.git
 analyze:
   modules:
     - name: v8go
       type: go
-      target: rogchap.com/v8go
+      target: github.com/robomotionio/v8go
       path: .

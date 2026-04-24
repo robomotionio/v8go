@@ -1,12 +1,11 @@
 # Execute JavaScript from Go
 
-<a href="https://github.com/rogchap/v8go/releases"><img src="https://img.shields.io/github/v/release/rogchap/v8go" alt="Github release"></a>
-[![Go Report Card](https://goreportcard.com/badge/rogchap.com/v8go)](https://goreportcard.com/report/rogchap.com/v8go)
-[![Go Reference](https://pkg.go.dev/badge/rogchap.com/v8go.svg)](https://pkg.go.dev/rogchap.com/v8go)
-[![CI](https://github.com/rogchap/v8go/workflows/CI/badge.svg)](https://github.com/rogchap/v8go/actions?query=workflow%3ACI)
-![V8 Build](https://github.com/rogchap/v8go/workflows/V8%20Build/badge.svg)
-[![codecov](https://codecov.io/gh/rogchap/v8go/branch/master/graph/badge.svg?token=VHZwzGm3dV)](https://codecov.io/gh/rogchap/v8go)
-[![FOSSA Status](https://app.fossa.com/api/projects/custom%2B22862%2Fgit%40github.com%3Arogchap%2Fv8go.git.svg?type=shield)](https://app.fossa.com/projects/custom%2B22862%2Fgit%40github.com%3Arogchap%2Fv8go.git?ref=badge_shield)
+<a href="https://github.com/robomotionio/v8go/releases"><img src="https://img.shields.io/github/v/release/robomotionio/v8go" alt="Github release"></a>
+[![Go Report Card](https://goreportcard.com/badge/github.com/robomotionio/v8go)](https://goreportcard.com/report/github.com/robomotionio/v8go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/robomotionio/v8go.svg)](https://pkg.go.dev/github.com/robomotionio/v8go)
+[![CI](https://github.com/robomotionio/v8go/workflows/CI/badge.svg)](https://github.com/robomotionio/v8go/actions?query=workflow%3ACI)
+![V8 Build](https://github.com/robomotionio/v8go/workflows/V8%20Build/badge.svg)
+[![codecov](https://codecov.io/gh/robomotionio/v8go/branch/master/graph/badge.svg?token=VHZwzGm3dV)](https://codecov.io/gh/robomotionio/v8go)
 [![#v8go Slack Channel](https://img.shields.io/badge/slack-%23v8go-4A154B?logo=slack)](https://gophers.slack.com/channels/v8go)
 
 <img src="gopher.jpg" width="200px" alt="V8 Gopher based on original artwork from the amazing Renee French" />
@@ -14,7 +13,7 @@
 ## Usage
 
 ```go
-import v8 "rogchap.com/v8go"
+import v8 "github.com/robomotionio/v8go"
 ```
 
 ### Running a script
@@ -183,7 +182,7 @@ func printTree(nest string, node *v8.CPUProfileNode) {
 
 ## Documentation
 
-Go Reference & more examples: https://pkg.go.dev/rogchap.com/v8go
+Go Reference & more examples: https://pkg.go.dev/github.com/robomotionio/v8go
 
 ### Support
 
@@ -206,7 +205,7 @@ objects. This means Go's default MinGW-GCC cgo compiler will *not* work — use 
    go build ./...
    ```
 
-3. `go get rogchap.com/v8go` as usual.
+3. `go get github.com/robomotionio/v8go` as usual.
 
 MinGW-w64 is not supported.
 
@@ -231,7 +230,6 @@ This project also aims to keep up-to-date with the latest (stable) release of V8
 
 ## License
 
-[![FOSSA Status](https://app.fossa.com/api/projects/custom%2B22862%2Fgit%40github.com%3Arogchap%2Fv8go.git.svg?type=large)](https://app.fossa.com/projects/custom%2B22862%2Fgit%40github.com%3Arogchap%2Fv8go.git?ref=badge_large)
 
 ## Development
 
@@ -246,15 +244,15 @@ This project also aims to keep up-to-date with the latest (stable) release of V8
 
 ### Upgrading the V8 binaries
 
-We have the [upgradev8](https://github.com/rogchap/v8go/.github/workflow/v8upgrade.yml) workflow.
+We have the [upgradev8](https://github.com/robomotionio/v8go/.github/workflow/v8upgrade.yml) workflow.
 The workflow is triggered every day or manually.
 
-If the current [v8_version](https://github.com/rogchap/v8go/deps/v8_version) is different from the latest stable version, the workflow takes care of fetching the latest stable v8 files and copying them into `deps/include`. The last step of the workflow opens a new PR with the branch name `v8_upgrade/<v8-version>` with all the changes.
+If the current [v8_version](https://github.com/robomotionio/v8go/deps/v8_version) is different from the latest stable version, the workflow takes care of fetching the latest stable v8 files and copying them into `deps/include`. The last step of the workflow opens a new PR with the branch name `v8_upgrade/<v8-version>` with all the changes.
 
 The next steps are:
 
 1) The build is not yet triggered automatically. To trigger it manually, go to the [V8
-Build](https://github.com/rogchap/v8go/actions?query=workflow%3A%22V8+Build%22) Github Action, Select "Run workflow",
+Build](https://github.com/robomotionio/v8go/actions?query=workflow%3A%22V8+Build%22) Github Action, Select "Run workflow",
 and select your pushed branch eg. `v8_upgrade/<v8-version>`.
 1) Once built, this should open 3 PRs against your branch to add the `libv8.a` for Linux (for x86_64) and macOS for x86_64 and arm64; merge
 these PRs into your branch. You are now ready to raise the PR against `master` with the latest version of V8.

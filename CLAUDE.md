@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`v8go` is a CGo binding that lets Go programs execute JavaScript via the V8 engine. The Go module path is `rogchap.com/v8go`. Prebuilt V8 static libraries for Linux (x86_64/arm64), macOS (x86_64/arm64), and Windows (x86_64/arm64) are vendored under `deps/`; users of the package should not need to build V8 themselves.
+`v8go` is a CGo binding that lets Go programs execute JavaScript via the V8 engine. The Go module path is `github.com/robomotionio/v8go`. Prebuilt V8 static libraries for Linux (x86_64/arm64), macOS (x86_64/arm64), and Windows (x86_64/arm64) are vendored under `deps/`; users of the package should not need to build V8 themselves.
 
 Windows consumers must build with clang (`CC=clang.exe CXX=clang++.exe`) because V8's Windows binary is MSVC-ABI (clang-cl). MinGW-GCC is not supported.
 
@@ -51,7 +51,7 @@ Important — getting this wrong causes use-after-free or leaks:
 
 ### CGo build configuration (`cgo.go`)
 
-`cgo.go` is the single source of truth for build flags: `-std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_ENABLE_SANDBOX`, plus per-platform link flags from `deps/{os}_{arch}/`. On Linux/macOS it links `libv8.a` (`-lv8 -pthread`); on Windows it links `v8_monolith.lib` plus `dbghelp`, `winmm`, `shlwapi`, `advapi32`. The `_ "rogchap.com/v8go/deps/..."` blank imports exist **only** to force `go mod vendor` to include those directories — don't remove them.
+`cgo.go` is the single source of truth for build flags: `-std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_ENABLE_SANDBOX`, plus per-platform link flags from `deps/{os}_{arch}/`. On Linux/macOS it links `libv8.a` (`-lv8 -pthread`); on Windows it links `v8_monolith.lib` plus `dbghelp`, `winmm`, `shlwapi`, `advapi32`. The `_ "github.com/robomotionio/v8go/deps/..."` blank imports exist **only** to force `go mod vendor` to include those directories — don't remove them.
 
 ## V8 dependency & upgrades
 

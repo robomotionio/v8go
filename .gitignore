@@ -6,8 +6,14 @@
 .gclient_entries
 .gcs_entries
 
-deps/darwin-x86_64/libv8_debug.a
 deps/.gclient_previous*
 c.out
 .idea/*
 /v8go.test
+/.claude/
+
+# Prebuilt V8 binaries are NOT in git — fetch via scripts/fetch-libv8.sh
+# (they live as GitHub Release assets on the repo).
+deps/*_*/libv8.a
+deps/*_*/libv8_debug.a
+deps/*_*/v8_monolith.lib

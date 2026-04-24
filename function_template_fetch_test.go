@@ -16,7 +16,7 @@ import (
 	"net/http"
 	"strings"
 
-	v8 "rogchap.com/v8go"
+	v8 "github.com/robomotionio/v8go"
 )
 
 func ExampleFunctionTemplate_fetch() {
@@ -42,7 +42,7 @@ func ExampleFunctionTemplate_fetch() {
 
 	ctx := v8.NewContext(iso, global)
 	defer ctx.Close()
-	val, _ := ctx.RunScript("fetch('https://rogchap.com/v8go')", "")
+	val, _ := ctx.RunScript("fetch('https://github.com/robomotionio/v8go')", "")
 	prom, _ := val.AsPromise()
 
 	// wait for the promise to resolve

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	v8 "rogchap.com/v8go"
+	v8 "github.com/robomotionio/v8go"
 )
 
 func TestContextExec(t *testing.T) {
@@ -114,7 +114,7 @@ func TestMemoryLeak(t *testing.T) {
 	}
 }
 
-// https://github.com/rogchap/v8go/issues/186
+// https://github.com/robomotionio/v8go/issues/186
 func TestRegistryFromJSON(t *testing.T) {
 	t.Parallel()
 

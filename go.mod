@@ -1,3 +1,3 @@
-module rogchap.com/v8go
+module github.com/robomotionio/v8go
 
 go 1.17
