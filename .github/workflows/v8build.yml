@@ -52,7 +52,9 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x86_64, arm64]
-    runs-on: macos-14
+    # macos-15 ships Xcode 16+ with MacOSX15.sdk, which V8 14.x requires.
+    # macos-14 (Xcode 15.x, SDK 14.5) fails gn gen with "No 15+ SDK found".
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,6 +87,10 @@ jobs:
     runs-on: windows-latest
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+      # Skip gclient's attempt to `git pull` depot_tools before sync. The
+      # bootstrap step below modifies depot_tools files in-place, which
+      # collides with gclient's "Updating depot_tools..." checkout.
+      DEPOT_TOOLS_UPDATE: '0'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
