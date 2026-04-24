@@ -39,8 +39,6 @@ gclient_sln = [
             "v8/third_party/android_tools"          : None,
             "v8/third_party/catapult"               : None,
             "v8/third_party/colorama/src"           : None,
-            "v8/tools/gyp"                          : None,
-            "v8/tools/luci-go"                      : None,
         },
         "custom_vars": {
             "build_for_node" : True,
@@ -53,9 +51,10 @@ is_debug=%s
 is_clang=%s
 target_cpu="%s"
 v8_target_cpu="%s"
+target_os="%s"
 clang_use_chrome_plugins=false
 use_custom_libcxx=false
-use_sysroot=false
+use_sysroot=%s
 symbol_level=%s
 strip_debug_info=%s
 is_component_build=false
@@ -74,6 +73,10 @@ def v8deps():
     spec = "solutions = %s" % gclient_sln
     env = os.environ.copy()
     env["PATH"] = tools_path + os.pathsep + env["PATH"]
+    if is_windows:
+        # Non-Google users of depot_tools must set this so gclient does not try
+        # to download Google's internal Windows toolchain.
+        env.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
     subprocess.check_call(cmd(["gclient", "sync", "--spec", spec]),
                         cwd=deps_path,
                         env=env)
@@ -90,39 +93,34 @@ def v8_arch():
         return "x64"
     return args.arch
 
-def apply_mingw_patches():
-    v8_build_path = os.path.join(v8_path, "build")
-    apply_patch("0000-add-mingw-main-code-changes", v8_path)
-    apply_patch("0001-add-mingw-toolchain", v8_build_path)
-    update_last_change()
-    zlib_path = os.path.join(v8_path, "third_party", "zlib")
-    zlib_src_gn = os.path.join(deps_path, os_arch(), "zlib.gn")
-    zlib_dst_gn = os.path.join(zlib_path, "BUILD.gn")
-    shutil.copy(zlib_src_gn, zlib_dst_gn)
-
-def apply_patch(patch_name, working_dir):
-    patch_path = os.path.join(deps_path, os_arch(), patch_name + ".patch")
-    subprocess.check_call(["git", "apply", "-v", patch_path], cwd=working_dir)
-
-def update_last_change():
-    out_path = os.path.join(v8_path, "build", "util", "LASTCHANGE")
-    subprocess.check_call(["python", "build/util/lastchange.py", "-o", out_path], cwd=v8_path)
+def target_os():
+    if is_windows:
+        return "win"
+    u = platform.uname()[0].lower()
+    if u == "darwin":
+        return "mac"
+    return "linux"
 
 def main():
     v8deps()
-    if is_windows:
-        apply_mingw_patches()
 
-    gn_path = os.path.join(tools_path, "gn")
+    gn_path = os.path.join(tools_path, "gn" + (".exe" if is_windows else ""))
     assert(os.path.exists(gn_path))
     ninja_path = os.path.join(tools_path, "ninja" + (".exe" if is_windows else ""))
     assert(os.path.exists(ninja_path))
 
     build_path = os.path.join(deps_path, ".build", os_arch())
     env = os.environ.copy()
+    if is_windows:
+        env.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
 
     is_debug = 'true' if args.debug else 'false'
-    is_clang = 'true' if args.clang else 'false'
+    # V8 14.x only builds with clang on all platforms (MSVC support was removed
+    # in Sept 2024, so Windows uses clang-cl via is_clang=true).
+    is_clang = 'true' if (args.clang or is_windows) else 'false'
+    # Chromium sysroot is only used for Linux cross-compile; macOS uses the
+    # Xcode SDK and Windows uses the MSVC SDK discovered by clang-cl.
+    use_sysroot = 'true' if platform.system().lower() == "linux" else 'false'
     # symbol_level = 1 includes line number information
     # symbol_level = 2 can be used for additional debug information, but it can increase the
     #   compiled library by an order of magnitude and further slow down compilation
@@ -130,7 +128,8 @@ def main():
     strip_debug_info = 'false' if args.debug else 'true'
 
     arch = v8_arch()
-    gnargs = gn_args % (is_debug, is_clang, arch, arch, symbol_level, strip_debug_info)
+    gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
+                        use_sysroot, symbol_level, strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
 
     subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
@@ -140,11 +139,17 @@ def main():
                         cwd=v8_path,
                         env=env)
 
-    lib_fn = os.path.join(build_path, "obj/libv8_monolith.a")
     dest_path = os.path.join(deps_path, os_arch())
     if not os.path.exists(dest_path):
         os.makedirs(dest_path)
-    dest_fn = os.path.join(dest_path, 'libv8.a')
+
+    if is_windows:
+        # On Windows the monolith is an MSVC COFF static archive.
+        lib_fn = os.path.join(build_path, "obj", "v8_monolith.lib")
+        dest_fn = os.path.join(dest_path, 'v8_monolith.lib')
+    else:
+        lib_fn = os.path.join(build_path, "obj/libv8_monolith.a")
+        dest_fn = os.path.join(dest_path, 'libv8.a')
     shutil.copy(lib_fn, dest_fn)
 
 

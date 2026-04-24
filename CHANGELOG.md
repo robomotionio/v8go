@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.0] - 2026-04-24
+
+### Changed
+- Upgrade V8 to 14.7.173.21 (from 11.1.277.13).
+- v8go now compiles with `-std=c++20` (required by V8 14.x).
+- CI test matrix bumped to Go 1.22.x / 1.23.x; leakcheck runs on Go 1.22.x.
+- `v8build.yml` split into three jobs (linux / darwin / windows), each × {x86_64, arm64}.
+  Linux uses Chromium bundled clang; darwin uses Apple clang on `macos-14`; windows
+  uses V8's clang-cl via `windows-latest`.
+- `v8upgrade.yml` now runs on `ubuntu-latest` (Ubuntu 18.04 is out of support) and uses
+  Python 3.11; the upgrade branch is named `v8_upgrade/<version>`.
+- `deps/build.py` no longer applies MinGW-w64 patches; Windows is built with clang-cl
+  (`is_clang=true`, `target_os="win"`). `custom_deps` exclusion list trimmed for V8 14.x.
+
+### Added
+- Windows support restored for amd64 and arm64. Prebuilt `v8_monolith.lib` artifacts are
+  produced by CI under `deps/windows_x86_64/` and `deps/windows_arm64/`.
+  End users must build with `CC=clang.exe` / `CXX=clang++.exe` (LLVM) — MinGW-GCC is not
+  supported because V8 on Windows is MSVC-ABI.
+- `#cgo windows,{amd64,arm64} LDFLAGS` entries in `cgo.go` linking `v8_monolith`,
+  `dbghelp`, `winmm`, `shlwapi`, `advapi32`.
+
+### Removed
+- MinGW-w64 build branch from `deps/build.py` (`apply_mingw_patches`, `apply_patch`,
+  `update_last_change`).
+
+### Notes
+- The `thisAndArgs` workaround in `function_template.go` (originally introduced to
+  sidestep an `ERROR_COMMITMENT_LIMIT` on 2021-era Windows CI) is preserved for this
+  release. Re-evaluation is tracked as a follow-up now that Windows CI is back.
+- `v8go.cc`'s `Init()` retains the `#ifdef _WIN32` call to
+  `V8::InitializeExternalStartupData(".")`. Because the binary is built with
+  `v8_use_external_startup_data=false` this call is a no-op; kept to minimize churn.
+
+
 ## [v0.10.0] - 2023-04-10
 
 ### Changed

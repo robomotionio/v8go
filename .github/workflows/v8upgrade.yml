@@ -8,16 +8,16 @@ on:
 jobs:
     upgrade:
         name: Upgrade V8
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-latest
         steps:
             - name: Checkout
-              uses: actions/checkout@v2
+              uses: actions/checkout@v4
               with:
                   submodules: true
                   fetch-depth: 0
-            - uses: actions/setup-python@v2
+            - uses: actions/setup-python@v5
               with:
-                python-version: '3.8'
+                python-version: '3.11'
             - name: Update depot_tools fetch config
               run: cd deps/depot_tools && git config --unset-all remote.origin.fetch; git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
               shell: bash
@@ -29,11 +29,14 @@ jobs:
             - name: Create PR metadata
               id: pr_metadata
               run: |
-                echo ::set-output name=pr_branch::"v8_$(cat deps/v8_version)_upgrade"
-                echo ::set-output name=pr_commit_message::"Upgrade V8 binaries for $(cat deps/v8_version) version"
-                echo ::set-output name=pr_body::"Auto-generated pull request to upgrade V8 binary for $(cat deps/v8_version) version"
+                version=$(cat deps/v8_version)
+                {
+                  echo "pr_branch=v8_upgrade/${version}"
+                  echo "pr_commit_message=Upgrade V8 binaries for ${version} version"
+                  echo "pr_body=Auto-generated pull request to upgrade V8 binary for ${version} version. After this PR is open, run the 'V8 Build' workflow on this branch to produce the six per-platform artifact PRs that must land on this branch before it merges to master."
+                } >> "$GITHUB_OUTPUT"
             - name: Create PR
-              uses: peter-evans/create-pull-request@v3
+              uses: peter-evans/create-pull-request@v6
               with:
                 commit-message: ${{steps.pr_metadata.outputs.pr_commit_message}}
                 branch: ${{steps.pr_metadata.outputs.pr_branch}}

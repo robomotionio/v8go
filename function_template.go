@@ -82,7 +82,10 @@ func (tmpl *FunctionTemplate) GetFunction(ctx *Context) *Function {
 }
 
 // Note that ideally `thisAndArgs` would be split into two separate arguments, but they were combined
-// to workaround an ERROR_COMMITMENT_LIMIT error on windows that was detected in CI.
+// to workaround an ERROR_COMMITMENT_LIMIT error on windows that was detected in CI circa 2021.
+// Windows CI was removed shortly after and the workaround has been preserved conservatively. Now
+// that Windows is supported again it is worth re-testing whether the split form still reproduces
+// the commitment-limit error on modern runners; see follow-up tracked in the v8go Windows restore.
 //
 //export goFunctionCallback
 func goFunctionCallback(ctxref int, cbref int, thisAndArgs *C.ValuePtr, argsCount int) C.ValuePtr {

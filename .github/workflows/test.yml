@@ -11,24 +11,36 @@ jobs:
   test:
     name: Tests on ${{ matrix.go-version }} ${{ matrix.platform }}
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [1.18.10, 1.19.5]
-        platform: [ubuntu-latest, macos-latest]
+        go-version: ['1.22.x', '1.23.x']
+        platform: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
 
     steps:
     - name: Install Go
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
+    - name: Install LLVM (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: choco install -y llvm
+    - name: Set clang as cgo compiler (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        echo CC=clang.exe>>"%GITHUB_ENV%"
+        echo CXX=clang++.exe>>"%GITHUB_ENV%"
     - name: Go Test
       env:
         CGO_CXXFLAGS: "-Werror"
       run: go test -v -coverprofile c.out ./...
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v1
+      if: runner.os != 'Windows'
+      uses: codecov/codecov-action@v4
       env:
         OS: ${{ matrix.platform }}
         GO: ${{ matrix.go-version }}
@@ -36,12 +48,12 @@ jobs:
         files: ./c.out
         env_vars: OS,GO
     - name: Add GOPATH to GITHUB_ENV
+      if: runner.os != 'Windows'
       run: echo "GOPATH=$(go env GOPATH)" >>"$GITHUB_ENV"
     - name: Scan and upload FOSSA data (Linux/Mac)
-      if: env.FOSSA_API_KEY != '' && github.ref == 'refs/heads/master'
+      if: runner.os != 'Windows' && env.FOSSA_API_KEY != '' && github.ref == 'refs/heads/master'
       run: |
         curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install.sh | sudo bash
         fossa analyze
       env:
         FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
-        

@@ -192,20 +192,30 @@ please join the [**#v8go**](https://gophers.slack.com/channels/v8go) channel on 
 
 ### Windows
 
-There used to be Windows binary support. For further information see, [PR #234](https://github.com/rogchap/v8go/pull/234).
+Windows amd64 and arm64 are supported. V8 is built with clang-cl on Windows (Microsoft's MSVC
+support was removed upstream in September 2024), so the cgo layer must also produce MSVC-ABI
+objects. This means Go's default MinGW-GCC cgo compiler will *not* work — use clang:
 
-The v8go library would welcome contributions from anyone able to get an external windows
-build of the V8 library linking with v8go, using the version of V8 checked out in the
-`deps/v8` git submodule, and documentation of the process involved. This process will likely
-involve passing a linker flag when building v8go (e.g. using the `CGO_LDFLAGS` environment
-variable.
+1. Install [LLVM](https://releases.llvm.org/) on the Windows host (includes `clang.exe`/`clang++.exe`).
+2. Set the cgo compiler before building:
+
+   ```cmd
+   set CC=clang.exe
+   set CXX=clang++.exe
+   set CGO_ENABLED=1
+   go build ./...
+   ```
+
+3. `go get rogchap.com/v8go` as usual.
+
+MinGW-w64 is not supported.
 
 ## V8 dependency
 
-V8 version: **9.0.257.18** (April 2021)
+V8 version: see [`deps/v8_version`](deps/v8_version).
 
 In order to make `v8go` usable as a standard Go package, prebuilt static libraries of V8
-are included for Linux and macOS. you *should not* require to build V8 yourself.
+are included for Linux, macOS, and Windows. You *should not* require to build V8 yourself.
 
 Due to security concerns of binary blobs hiding malicious code, the V8 binary is built via CI *ONLY*.
 
