@@ -220,7 +220,15 @@ def main():
         dest_fn = os.path.join(dest_path, 'libv8.a')
         if os.path.exists(dest_fn):
             os.remove(dest_fn)
-        # ar -M is a scripted interface that concatenates archives.
+        # MRI-scripted archive merge. macOS's BSD ar doesn't support -M, so
+        # we always use V8's bundled llvm-ar (also used by V8's own build).
+        # On Linux, GNU ar would also work, but using llvm-ar everywhere
+        # keeps the script uniform.
+        llvm_ar = os.path.join(v8_path, "third_party", "llvm-build",
+                               "Release+Asserts", "bin", "llvm-ar")
+        if not os.path.exists(llvm_ar):
+            # Fallback: system ar must be GNU (Linux). Will fail on macOS.
+            llvm_ar = "ar"
         script = (
             "CREATE {dest}\n"
             "ADDLIB {monolith}\n"
@@ -230,9 +238,10 @@ def main():
             "END\n"
         ).format(dest=dest_fn, monolith=monolith,
                  libcxx=libcxx, libcxxabi=libcxxabi)
-        subprocess.run(["ar", "-M"], input=script, text=True,
+        subprocess.run([llvm_ar, "-M"], input=script, text=True,
                        check=True)
-        subprocess.run(["ranlib", dest_fn], check=True)
+        # llvm-ar writes a symbol index by default; ranlib pass is only
+        # needed for tools that don't. Skip here; the archive is usable as-is.
 
 
 if __name__ == "__main__":
