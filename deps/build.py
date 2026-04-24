@@ -72,6 +72,11 @@ v8_enable_temporal_support=false
 """
 
 def v8deps():
+    # gclient sync refuses to run if any of the V8 sub-repos have
+    # uncommitted changes. Our apply_local_patches() modifies files in
+    # v8/build; revert those before sync so gclient sees a clean tree.
+    revert_local_patches()
+
     spec = "solutions = %s" % gclient_sln
     env = os.environ.copy()
     env["PATH"] = tools_path + os.pathsep + env["PATH"]
@@ -85,6 +90,21 @@ def v8deps():
 
 def cmd(args):
     return ["cmd", "/c"] + args if is_windows else args
+
+PATCHED_PATHS = [
+    # files inside v8/... that apply_local_patches() may modify
+    ("v8", "build", "config", "compiler", "BUILD.gn"),
+]
+
+def revert_local_patches():
+    """Reset any previously-applied local patches back to pristine state so
+    gclient sync is happy. Safe to call when the files aren't checked out
+    yet (first run) — git returns nonzero but that's fine."""
+    for parts in PATCHED_PATHS:
+        path = os.path.join(deps_path, *parts)
+        if os.path.exists(path):
+            subprocess.call(["git", "-C", os.path.dirname(path),
+                             "checkout", "--", os.path.basename(path)])
 
 def apply_local_patches():
     """Apply v8go local patches that gclient sync would otherwise reset.

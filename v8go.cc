@@ -42,7 +42,13 @@ struct m_value {
 
 struct m_template {
   Isolate* iso;
-  Persistent<Template> ptr;
+  // Heap-allocate the persistent so we can intentionally leak the handle in
+  // TemplateFreeWrapper when the finalizer may outlive the isolate. V8 14.x
+  // removed PersistentBase::Empty() (the old non-disposing clear), so the only
+  // way to free the struct without triggering a V8 DCHECK on a dead isolate
+  // is to drop the pointer to the persistent rather than destruct it. The
+  // handle slot leaks but is reclaimed on Isolate::Dispose.
+  Persistent<Template>* ptr;
 };
 
 struct m_unboundScript {
@@ -396,14 +402,14 @@ void CPUProfileDelete(CPUProfile* profile) {
   Locker locker(iso);                \
   Isolate::Scope isolate_scope(iso); \
   HandleScope handle_scope(iso);     \
-  Local<Template> tmpl = tmpl_ptr->ptr.Get(iso);
+  Local<Template> tmpl = tmpl_ptr->ptr->Get(iso);
 
 void TemplateFreeWrapper(TemplatePtr tmpl) {
-  // V8 14.x removed Persistent::Empty() (which zeroed the handle slot without
-  // calling V8::DisposeGlobal). Reset() does dispose the slot; it's the only
-  // supported way to release now. This adds one V8 call per freed template but
-  // templates are long-lived so the overhead is negligible.
-  tmpl->ptr.Reset();
+  // Intentionally leak the heap-allocated Persistent<Template>. Go's GC may
+  // invoke this finalizer after the owning Isolate is already disposed (at
+  // program exit, for instance), in which case Reset()ing would trip V8's
+  // node->IsInUse() DCHECK. The handle slot is reclaimed when the isolate is
+  // destroyed; the memory cost is negligible for templates' typical lifetime.
   delete tmpl;
 }
 
@@ -426,7 +432,7 @@ void TemplateSetTemplate(TemplatePtr ptr,
 
   Local<String> prop_name =
       String::NewFromUtf8(iso, name, NewStringType::kNormal).ToLocalChecked();
-  tmpl->Set(prop_name, obj->ptr.Get(iso), (PropertyAttribute)attributes);
+  tmpl->Set(prop_name, obj->ptr->Get(iso), (PropertyAttribute)attributes);
 }
 
 /********** ObjectTemplate **********/
@@ -438,7 +444,7 @@ TemplatePtr NewObjectTemplate(IsolatePtr iso) {
 
   m_template* ot = new m_template;
   ot->iso = iso;
-  ot->ptr.Reset(iso, ObjectTemplate::New(iso));
+  ot->ptr = new Persistent<Template>(iso, ObjectTemplate::New(iso));
   return ot;
 }
 
@@ -538,8 +544,8 @@ TemplatePtr NewFunctionTemplate(IsolatePtr iso, int callback_ref) {
 
   m_template* ot = new m_template;
   ot->iso = iso;
-  ot->ptr.Reset(iso,
-                FunctionTemplate::New(iso, FunctionTemplateCallback, cbData));
+  ot->ptr = new Persistent<Template>(
+      iso, FunctionTemplate::New(iso, FunctionTemplateCallback, cbData));
   return ot;
 }
 
@@ -586,7 +592,7 @@ ContextPtr NewContext(IsolatePtr iso,
 
   Local<ObjectTemplate> global_template;
   if (global_template_ptr != nullptr) {
-    global_template = global_template_ptr->ptr.Get(iso).As<ObjectTemplate>();
+    global_template = global_template_ptr->ptr->Get(iso).As<ObjectTemplate>();
   } else {
     global_template = ObjectTemplate::New(iso);
   }
