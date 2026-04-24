@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.0.0] - 2026-04-24
+## [v14.7.173.21] - 2026-04-24
+
+First release of the robomotionio/v8go fork of
+[rogchap/v8go](https://github.com/rogchap/v8go). Release tags follow the
+V8 version tag directly (`v<v8_version>`), so `scripts/fetch-libv8.go` can
+locate the prebuilt static libraries for the consumer's platform.
 
 ### Changed
 - Upgrade V8 to 14.7.173.21 (from 11.1.277.13).

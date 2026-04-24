@@ -3,25 +3,32 @@ name: Release
 on:
   push:
     tags:
-    - v*
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-    - name: Get version tag
-      id: version
-      run: echo "::set-output name=tag::${GITHUB_REF/refs\/tags\//}"
-    - name: Get changelog url
-      id: changelog
-      run: echo "${{ steps.version.outputs.tag }}---$(date +'%Y-%m-%d')" | sed -e 's/\.//g' | awk '{print "::set-output name=url::https://github.com/robomotionio/v8go/blob/master/CHANGELOG.md#" $1}'
-    - name: Create release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.version.outputs.tag }}
-        release_name: ${{ steps.version.outputs.tag }}
-        body: Full changelog ⇒ [${{ steps.version.outputs.tag }}](${{ steps.changelog.outputs.url }})
-        draft: true
-        prerelease: false
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF##refs/tags/}"
+          # Link anchor in Keep-a-Changelog format: "## [v14.7.173.21] - 2026-04-24"
+          # renders as #v147173213-2026-04-24 (GitHub strips periods in anchors).
+          ANCHOR=$(echo "${TAG}---$(date +'%Y-%m-%d')" | sed -e 's/\.//g')
+          CHANGELOG_URL="https://github.com/${GITHUB_REPOSITORY}/blob/master/CHANGELOG.md#${ANCHOR}"
+          gh release create "$TAG" \
+            --draft \
+            --title "$TAG" \
+            --notes "Full changelog: [${TAG}](${CHANGELOG_URL})
+
+          Publishing this release will trigger \`.github/workflows/v8build.yml\`,
+          which builds the prebuilt V8 static libraries for 6 target triples and
+          uploads them as release assets."
