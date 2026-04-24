@@ -51,7 +51,17 @@ Important — getting this wrong causes use-after-free or leaks:
 
 ### CGo build configuration (`cgo.go`)
 
-`cgo.go` is the single source of truth for build flags: `-std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH -DV8_ENABLE_SANDBOX`, plus per-platform link flags from `deps/{os}_{arch}/`. On Linux/macOS it links `libv8.a` (`-lv8 -pthread`); on Windows it links `v8_monolith.lib` plus `dbghelp`, `winmm`, `shlwapi`, `advapi32`. The `_ "github.com/robomotionio/v8go/deps/..."` blank imports exist **only** to force `go mod vendor` to include those directories — don't remove them.
+`cgo.go` is the single source of truth for build flags: `-std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH`, plus per-platform link flags from `deps/{os}_{arch}/`. V8's sandbox is currently disabled (see "V8 14.x build trade-offs" below), so `V8_ENABLE_SANDBOX` is intentionally not defined. On Linux, additional CXXFLAGS route through libc++: `-stdlib=libc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi` plus `-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE` to match V8's internal build. On Linux/macOS it links `libv8.a` (`-lv8 -pthread`); on Windows it links `v8_monolith.lib` plus `dbghelp`, `winmm`, `shlwapi`, `advapi32`. The `_ "github.com/robomotionio/v8go/deps/..."` blank imports exist **only** to force `go mod vendor` to include those directories — don't remove them.
+
+### V8 14.x build trade-offs
+
+The build.py GN arg choices balance V8's defaults against the ABI reality of the cgo embedder:
+
+- `use_custom_libcxx=true`: V8 14.x source (e.g. `src/bigint/bigint.h`) depends on transitive `<memory>` includes that libstdc++ doesn't provide. Using V8's bundled libc++ is necessary. libc++ is statically merged into `libv8.a` via `ar -M` after the monolith is produced, so consumers don't need a system libc++ install at link time.
+- `v8_enable_sandbox=false`: V8 14.x asserts `v8_enable_sandbox => use_safe_libcxx`. We don't use safe libc++, so the sandbox is off. This weakens V8's pointer-compression security guarantees; re-enabling would require switching the cgo pipeline to hardened libc++ too. Tracked as a follow-up.
+- `v8_enable_temporal_support=false`: V8 14.x's JS `Temporal` implementation depends on a Rust crate (`temporal_rs`) that's emitted as `.rlib`, not a linkable static archive. Bundling it would require either rustc-driven linking or `.rlib → .a` conversion. v8go doesn't need Temporal at the Go layer; disabling cuts ~150 build targets and the Rust toolchain dep.
+- `use_sysroot=false`: Chromium's `debian_bullseye_amd64-sysroot` ships a libstdc++ too old for C++20 `std::bit_cast`, which V8 14.x's `base/macros.h` uses. Host headers work everywhere we build.
+- CREL relocations stripped via `apply_local_patches()` in `deps/build.py`: V8 14.x with `use_lld=true` (required for the Rust-host build) emits `-Wa,--crel,--allow-experimental-crel`. Binutils GNU `ld` (which cgo's g++/clang++ drivers delegate to by default) can't read CREL yet. The patch removes that one cflag line from V8's `build/config/compiler/BUILD.gn` during build and reverts before the next `gclient sync` so the tree stays clean.
 
 ## V8 dependency & upgrades
 
