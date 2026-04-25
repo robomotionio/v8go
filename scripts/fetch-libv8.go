@@ -14,8 +14,8 @@
 //	-arch   override GOARCH (default: runtime.GOARCH)
 //	-force  overwrite an existing file
 //
-// The downloaded file is written to deps/{os}_{arch}/libv8.a (or
-// v8_monolith.lib on Windows).
+// The downloaded file is written to deps/{os}_{arch}/libv8.{a,lib} —
+// libv8.a on unix, libv8.lib on Windows.
 package main
 
 import (
@@ -115,7 +115,7 @@ func normalizeArch(a string) string {
 func assetFor(goos, arch string) (asset, destName string) {
 	switch goos {
 	case "windows":
-		return fmt.Sprintf("v8_monolith-windows-%s.lib", arch), "v8_monolith.lib"
+		return fmt.Sprintf("libv8-windows-%s.lib", arch), "libv8.lib"
 	default:
 		return fmt.Sprintf("libv8-%s-%s.a", goos, arch), "libv8.a"
 	}

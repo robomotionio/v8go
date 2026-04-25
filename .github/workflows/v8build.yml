@@ -92,9 +92,14 @@ jobs:
       fail-fast: false
       matrix:
         arch: ${{ fromJSON(needs.setup.outputs.darwin) }}
-    # macos-15 ships Xcode 16+ with MacOSX15.sdk, which V8 14.x requires.
-    # macos-14 (Xcode 15.x, SDK 14.5) fails gn gen with "No 15+ SDK found".
-    runs-on: macos-15
+    # macos-15 = Apple Silicon (arm64), macos-15-large = native Intel x86_64.
+    # We MUST build x86_64 on a native Intel runner: when the same arm64
+    # macos-15 runner cross-compiles to x86_64, gn places the libc++.a target
+    # archive at a path our find_target_archive glob doesn't match, so the
+    # libc++ merge silently fails and produces a libv8.a with 0 __Cr symbols
+    # (the bug that broke Mac-Intel deskbot links). Both runners ship Xcode
+    # 16+ / MacOSX15.sdk which V8 14.x requires.
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-15' || 'macos-15-large' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -157,11 +162,11 @@ jobs:
           python build.py --arch ${{ matrix.arch }}
       - name: Stage artifact
         shell: cmd
-        run: copy deps\windows_${{ matrix.arch }}\v8_monolith.lib v8_monolith-windows-${{ matrix.arch }}.lib
+        run: copy deps\windows_${{ matrix.arch }}\libv8.lib libv8-windows-${{ matrix.arch }}.lib
       - name: Upload to release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
-          gh release upload "$TAG" v8_monolith-windows-${{ matrix.arch }}.lib --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" libv8-windows-${{ matrix.arch }}.lib --clobber --repo "$GITHUB_REPOSITORY"

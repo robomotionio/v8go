@@ -200,11 +200,53 @@ def main():
         os.makedirs(dest_path)
 
     if is_windows:
-        # On Windows the monolith is an MSVC COFF static archive. libc++ is
-        # statically merged into v8_monolith.lib by the Windows build.
-        lib_fn = os.path.join(build_path, "obj", "v8_monolith.lib")
-        dest_fn = os.path.join(dest_path, 'v8_monolith.lib')
-        shutil.copy(lib_fn, dest_fn)
+        # On Windows v8_monolith.lib is just the V8 objects — Chromium's
+        # use_custom_libcxx=true builds libc++.lib and libc++abi.lib as
+        # SEPARATE archives, and the v8_monolithic target doesn't merge them.
+        # Without merging, downstream consumers compiling cgo bindings against
+        # the bundled libc++ headers (std::__Cr namespace) get thousands of
+        # unresolved external symbol errors at link time for std::__Cr::cerr,
+        # basic_string ctors, __libcpp_verbose_abort, basic_streambuf vtables,
+        # etc. — all defined in libc++.lib.
+        #
+        # Mirror the Linux/macOS merge using llvm-lib (LLVM's MSVC-compatible
+        # alternative to llvm-ar). Output is named libv8.lib for naming
+        # consistency with libv8.a (the unix archive).
+        import glob
+        monolith = os.path.join(build_path, "obj", "v8_monolith.lib")
+
+        def find_target_lib(name):
+            matches = []
+            for path in glob.glob(os.path.join(
+                    build_path, "**", "buildtools", "third_party",
+                    name, name + ".lib"), recursive=True):
+                if "/clang_" in path.replace("\\", "/") and "_v8_" in path:
+                    continue
+                matches.append(path)
+            return matches[0] if matches else None
+
+        libcxx = find_target_lib("libc++")
+        libcxxabi = find_target_lib("libc++abi")
+        dest_fn = os.path.join(dest_path, 'libv8.lib')
+        if os.path.exists(dest_fn):
+            os.remove(dest_fn)
+        if not libcxx or not libcxxabi:
+            # Hard fail rather than silently produce a broken archive — this
+            # is exactly the bug that historically shipped Windows libv8 with
+            # 0 libc++ symbols, breaking every downstream consumer.
+            raise RuntimeError(
+                f"libc++/libc++abi target archives not found under {build_path};"
+                f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
+                f" output layout (likely a cross-compile path the glob missed)"
+                f" and update find_target_lib() accordingly.")
+        llvm_lib = os.path.join(v8_path, "third_party", "llvm-build",
+                                "Release+Asserts", "bin", "llvm-lib.exe")
+        if not os.path.exists(llvm_lib):
+            llvm_lib = "lib.exe"  # fall back to MSVC's lib.exe on PATH
+        print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
+              "into libv8.lib")
+        subprocess.check_call([llvm_lib, "/OUT:" + dest_fn,
+                               monolith, libcxx, libcxxabi])
     else:
         # V8's bundled libc++ and libc++abi live in separate archives that
         # v8_monolith links against at final-binary link time. v8go's
@@ -241,26 +283,29 @@ def main():
                                "Release+Asserts", "bin", "llvm-ar")
         if not os.path.exists(llvm_ar):
             llvm_ar = "ar"
-        if libcxx and libcxxabi:
-            print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
-                  "into libv8.a")
-            script = (
-                "CREATE {dest}\n"
-                "ADDLIB {monolith}\n"
-                "ADDLIB {libcxx}\n"
-                "ADDLIB {libcxxabi}\n"
-                "SAVE\n"
-                "END\n"
-            ).format(dest=dest_fn, monolith=monolith,
-                     libcxx=libcxx, libcxxabi=libcxxabi)
-            subprocess.run([llvm_ar, "-M"], input=script, text=True,
-                           check=True)
-        else:
-            # No separate libc++ produced (likely a cross-compile config that
-            # already bundles libc++ into v8_monolith). Just copy the monolith.
-            print("libc++/libc++abi target archives not found; "
-                  "copying v8_monolith.a as-is to libv8.a")
-            shutil.copy(monolith, dest_fn)
+        if not libcxx or not libcxxabi:
+            # Hard fail rather than silently produce a broken archive — the
+            # silent-fallback path historically shipped a Mac-Intel libv8.a
+            # with 0 __Cr symbols (cross-compile output went to a path the
+            # glob missed). Loud failure forces us to fix find_target_archive.
+            raise RuntimeError(
+                f"libc++/libc++abi target archives not found under {build_path};"
+                f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
+                f" output layout (likely a cross-compile path the glob missed)"
+                f" and update find_target_archive() accordingly.")
+        print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
+              "into libv8.a")
+        script = (
+            "CREATE {dest}\n"
+            "ADDLIB {monolith}\n"
+            "ADDLIB {libcxx}\n"
+            "ADDLIB {libcxxabi}\n"
+            "SAVE\n"
+            "END\n"
+        ).format(dest=dest_fn, monolith=monolith,
+                 libcxx=libcxx, libcxxabi=libcxxabi)
+        subprocess.run([llvm_ar, "-M"], input=script, text=True,
+                       check=True)
         # llvm-ar writes a symbol index by default; no separate ranlib pass.
 
 
