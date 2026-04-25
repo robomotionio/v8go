@@ -10,7 +10,7 @@ package v8go
 // #cgo !windows CXXFLAGS: -fPIC
 // #cgo linux CXXFLAGS: -stdlib=libc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo darwin CXXFLAGS: -stdlib=libc++
-// #cgo windows CXXFLAGS: -nostdinc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
+// #cgo windows CXXFLAGS: -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo !windows LDFLAGS: -pthread -lv8
 // #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/deps/darwin_x86_64
 // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/deps/darwin_arm64
