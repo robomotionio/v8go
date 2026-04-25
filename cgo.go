@@ -16,8 +16,8 @@ package v8go
 // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/deps/darwin_arm64
 // #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/deps/linux_x86_64 -ldl
 // #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/deps/linux_arm64 -ldl
-// #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/deps/windows_x86_64 -llibv8 -ldbghelp -lwinmm -lshlwapi -ladvapi32
-// #cgo windows,arm64 LDFLAGS: -L${SRCDIR}/deps/windows_arm64 -llibv8 -ldbghelp -lwinmm -lshlwapi -ladvapi32
+// #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/deps/windows_x86_64 -llibv8 -llibvcruntime -llibcmt -llibcpmt -llibucrt -loldnames -ldbghelp -lwinmm -lshlwapi -ladvapi32
+// #cgo windows,arm64 LDFLAGS: -L${SRCDIR}/deps/windows_arm64 -llibv8 -llibvcruntime -llibcmt -llibcpmt -llibucrt -loldnames -ldbghelp -lwinmm -lshlwapi -ladvapi32
 import "C"
 
 // These imports forces `go mod vendor` to pull in all the folders that
