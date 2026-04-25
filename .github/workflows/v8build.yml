@@ -6,15 +6,32 @@ on:
       tag:
         description: 'Release tag to attach built artifacts to (e.g. v14.7.173.21)'
         required: true
+      platforms:
+        description: |
+          Comma-separated targets to build, or "all". Names: linux_x86_64,
+          linux_arm64, darwin_x86_64, darwin_arm64, windows_x86_64,
+          windows_arm64. E.g. "darwin_x86_64,linux_arm64" rebuilds just
+          those two; assets already on the release for other targets are
+          left untouched.
+        required: false
+        default: 'all'
   release:
     types: [published]
 
 permissions:
   contents: write  # needed to upload release assets
 
+# Used in each job's `if:` to skip the entire matrix entry when the user
+# dispatches a partial rebuild. Release-publish triggers always build everything.
+# `format(',{0},', X)` wraps with separators so `contains` matches whole
+# tokens (linux_arm64 won't accidentally match against linux_arm64_extra).
+env:
+  PLATFORMS: ${{ github.event_name == 'release' && 'all' || github.event.inputs.platforms || 'all' }}
+
 jobs:
   build-linux:
     name: Build V8 for linux ${{ matrix.arch }}
+    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',linux_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +65,7 @@ jobs:
 
   build-darwin:
     name: Build V8 for darwin ${{ matrix.arch }}
+    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',darwin_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +98,7 @@ jobs:
 
   build-windows:
     name: Build V8 for windows ${{ matrix.arch }}
+    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',windows_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
