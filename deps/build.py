@@ -201,52 +201,59 @@ def main():
 
     if is_windows:
         # On Windows v8_monolith.lib is just the V8 objects — Chromium's
-        # use_custom_libcxx=true builds libc++.lib and libc++abi.lib as
-        # SEPARATE archives, and the v8_monolithic target doesn't merge them.
-        # Without merging, downstream consumers compiling cgo bindings against
-        # the bundled libc++ headers (std::__Cr namespace) get thousands of
-        # unresolved external symbol errors at link time for std::__Cr::cerr,
-        # basic_string ctors, __libcpp_verbose_abort, basic_streambuf vtables,
-        # etc. — all defined in libc++.lib.
+        # use_custom_libcxx=true builds libc++ and libc++abi as `source_set`
+        # targets (loose .obj files at obj/buildtools/third_party/libc++/
+        # libc++/*.obj — note the doubled libc++/libc++/), NOT static_library
+        # targets. So unlike Linux/macOS there's no libc++.a/lib to point at;
+        # we have to glob the individual .obj files and merge them into
+        # libv8.lib via llvm-lib /OUT (which accepts a mix of .lib + .obj
+        # inputs and produces a single .lib union).
         #
-        # Mirror the Linux/macOS merge using llvm-lib (LLVM's MSVC-compatible
-        # alternative to llvm-ar). Output is named libv8.lib for naming
-        # consistency with libv8.a (the unix archive).
+        # Without this merge, downstream consumers compiling cgo bindings
+        # against the bundled libc++ headers (std::__Cr namespace) get
+        # thousands of unresolved external symbol errors at link time for
+        # std::__Cr::cerr, basic_string ctors, __libcpp_verbose_abort,
+        # basic_streambuf vtables, etc. — all referenced from inside
+        # v8_monolith.lib but defined in the libc++ .obj files.
+        #
+        # Output is named libv8.lib for naming consistency with libv8.a (the
+        # unix archive).
         import glob
         monolith = os.path.join(build_path, "obj", "v8_monolith.lib")
 
-        def find_target_lib(name):
-            matches = []
+        def find_target_objs(name):
+            # libc++ source_set output: obj/buildtools/third_party/<name>/<name>/*.obj
+            objs = []
             for path in glob.glob(os.path.join(
                     build_path, "**", "buildtools", "third_party",
-                    name, name + ".lib"), recursive=True):
+                    name, name, "*.obj"), recursive=True):
                 if "/clang_" in path.replace("\\", "/") and "_v8_" in path:
                     continue
-                matches.append(path)
-            return matches[0] if matches else None
+                objs.append(path)
+            return objs
 
-        libcxx = find_target_lib("libc++")
-        libcxxabi = find_target_lib("libc++abi")
+        libcxx_objs = find_target_objs("libc++")
+        libcxxabi_objs = find_target_objs("libc++abi")
         dest_fn = os.path.join(dest_path, 'libv8.lib')
         if os.path.exists(dest_fn):
             os.remove(dest_fn)
-        if not libcxx or not libcxxabi:
-            # Hard fail rather than silently produce a broken archive — this
-            # is exactly the bug that historically shipped Windows libv8 with
-            # 0 libc++ symbols, breaking every downstream consumer.
+        if not libcxx_objs or not libcxxabi_objs:
             raise RuntimeError(
-                f"libc++/libc++abi target archives not found under {build_path};"
-                f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
-                f" output layout (likely a cross-compile path the glob missed)"
-                f" and update find_target_lib() accordingly.")
+                f"libc++/libc++abi target .obj files not found under "
+                f"{build_path}; libc++ count={len(libcxx_objs)} "
+                f"libc++abi count={len(libcxxabi_objs)}. Inspect the build "
+                f"output layout under obj/buildtools/third_party/ and update "
+                f"find_target_objs() accordingly.")
         llvm_lib = os.path.join(v8_path, "third_party", "llvm-build",
                                 "Release+Asserts", "bin", "llvm-lib.exe")
         if not os.path.exists(llvm_lib):
             llvm_lib = "lib.exe"  # fall back to MSVC's lib.exe on PATH
-        print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
-              "into libv8.lib")
-        subprocess.check_call([llvm_lib, "/OUT:" + dest_fn,
-                               monolith, libcxx, libcxxabi])
+        print(f"merging {len(libcxx_objs)} libc++ + {len(libcxxabi_objs)} "
+              f"libc++abi .obj files into libv8.lib")
+        # llvm-lib /OUT:dest input1 input2 ...  — accepts both .lib and .obj
+        # inputs; produces a .lib that's a union of all members.
+        subprocess.check_call([llvm_lib, "/OUT:" + dest_fn, monolith]
+                              + libcxx_objs + libcxxabi_objs)
     else:
         # V8's bundled libc++ and libc++abi live in separate archives that
         # v8_monolith links against at final-binary link time. v8go's
