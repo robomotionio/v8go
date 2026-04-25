@@ -248,15 +248,21 @@ def main():
                 f"Inspect the build output layout under "
                 f"obj/buildtools/third_party/libc++/ and update "
                 f"find_target_objs() accordingly.")
-        llvm_lib = os.path.join(v8_path, "third_party", "llvm-build",
-                                "Release+Asserts", "bin", "llvm-lib.exe")
-        if not os.path.exists(llvm_lib):
-            llvm_lib = "lib.exe"  # fall back to MSVC's lib.exe on PATH
+        # Chromium's bundled LLVM doesn't ship llvm-lib.exe; use lld-link.exe
+        # in /lib mode instead — this is the same tool V8 itself uses to
+        # produce v8_monolith.lib (visible in the ninja log as
+        # `lld-link.exe /lib "/OUT:obj/v8_monolith.lib" ...`).
+        lld_link = os.path.join(v8_path, "third_party", "llvm-build",
+                                "Release+Asserts", "bin", "lld-link.exe")
+        if not os.path.exists(lld_link):
+            raise RuntimeError(
+                f"lld-link.exe not found at {lld_link}; expected as part of "
+                f"V8's bundled Chromium LLVM toolchain.")
         print(f"merging {len(libcxx_objs)} libc++ + {len(libcxxabi_objs)} "
-              f"libc++abi .obj files into libv8.lib")
-        # llvm-lib /OUT:dest input1 input2 ...  — accepts both .lib and .obj
-        # inputs; produces a .lib that's a union of all members.
-        subprocess.check_call([llvm_lib, "/OUT:" + dest_fn, monolith]
+              f"libc++abi .obj files into libv8.lib via lld-link /lib")
+        # lld-link /lib /OUT:dest input1 input2 ...  — accepts both .lib and
+        # .obj inputs; produces a .lib that's a union of all members.
+        subprocess.check_call([lld_link, "/lib", "/OUT:" + dest_fn, monolith]
                               + libcxx_objs + libcxxabi_objs)
     else:
         # V8's bundled libc++ and libc++abi live in separate archives that
