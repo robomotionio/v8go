@@ -155,6 +155,17 @@ jobs:
         run: |
           cd deps\depot_tools
           call bootstrap\win_tools.bat
+      # Cache the gn/ninja build dir. On cache hit ninja sees its outputs as
+      # up-to-date and exits in seconds, so the post-ninja merge step in
+      # build.py can be re-run without paying the 1.5h compile cost. Cache
+      # writes happen even when the job fails, so a failure at the merge
+      # step still preserves the build dir for the next iteration.
+      # Bump the suffix to manually invalidate.
+      - name: Cache V8 build dir
+        uses: actions/cache@v4
+        with:
+          path: deps/.build/windows_${{ matrix.arch }}
+          key: v8build-windows-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
       - name: Build V8
         shell: cmd
         run: |

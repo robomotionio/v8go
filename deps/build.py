@@ -251,7 +251,7 @@ def main():
         # Chromium's bundled LLVM doesn't ship llvm-lib.exe; use lld-link.exe
         # in /lib mode instead — this is the same tool V8 itself uses to
         # produce v8_monolith.lib (visible in the ninja log as
-        # `lld-link.exe /lib "/OUT:obj/v8_monolith.lib" ...`).
+        # `lld-link.exe /lib "/OUT:obj/v8_monolith.lib" ... "@obj/v8_monolith.lib.rsp"`).
         lld_link = os.path.join(v8_path, "third_party", "llvm-build",
                                 "Release+Asserts", "bin", "lld-link.exe")
         if not os.path.exists(lld_link):
@@ -260,10 +260,19 @@ def main():
                 f"V8's bundled Chromium LLVM toolchain.")
         print(f"merging {len(libcxx_objs)} libc++ + {len(libcxxabi_objs)} "
               f"libc++abi .obj files into libv8.lib via lld-link /lib")
-        # lld-link /lib /OUT:dest input1 input2 ...  — accepts both .lib and
-        # .obj inputs; produces a .lib that's a union of all members.
-        subprocess.check_call([lld_link, "/lib", "/OUT:" + dest_fn, monolith]
-                              + libcxx_objs + libcxxabi_objs)
+        # Use a response file (@file) for the input list — Windows CMD has an
+        # 8192 char command line limit and 50+ .obj paths can exceed it. V8
+        # itself uses response files for the same reason. Each path goes on
+        # its own line; backslashes are fine, no escaping needed for the
+        # paths we generate.
+        rsp_path = os.path.join(build_path, "libv8.rsp")
+        with open(rsp_path, "w") as rsp:
+            rsp.write(monolith + "\n")
+            for obj in libcxx_objs + libcxxabi_objs:
+                rsp.write(obj + "\n")
+        subprocess.check_call(
+            [lld_link, "/lib", "/nologo", "/OUT:" + dest_fn,
+             "@" + rsp_path])
     else:
         # V8's bundled libc++ and libc++abi live in separate archives that
         # v8_monolith links against at final-binary link time. v8go's
