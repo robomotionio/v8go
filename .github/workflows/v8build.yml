@@ -12,7 +12,8 @@ on:
           linux_arm64, darwin_x86_64, darwin_arm64, windows_x86_64,
           windows_arm64. E.g. "darwin_x86_64,linux_arm64" rebuilds just
           those two; assets already on the release for other targets are
-          left untouched.
+          left untouched (gh release upload --clobber replaces only matching
+          asset names).
         required: false
         default: 'all'
   release:
@@ -21,21 +22,41 @@ on:
 permissions:
   contents: write  # needed to upload release assets
 
-# Used in each job's `if:` to skip the entire matrix entry when the user
-# dispatches a partial rebuild. Release-publish triggers always build everything.
-# `format(',{0},', X)` wraps with separators so `contains` matches whole
-# tokens (linux_arm64 won't accidentally match against linux_arm64_extra).
-env:
-  PLATFORMS: ${{ github.event_name == 'release' && 'all' || github.event.inputs.platforms || 'all' }}
-
 jobs:
+  # Tiny setup job that turns the `platforms` input (or the "build all" default
+  # for release-publish triggers) into per-OS arch lists. Each downstream
+  # build job consumes its OS's arch list as a dynamic matrix; if the list is
+  # empty the job is skipped via `if:`. This is how we avoid spinning up
+  # runners for platforms the user didn't ask to rebuild.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      linux: ${{ steps.f.outputs.linux }}
+      darwin: ${{ steps.f.outputs.darwin }}
+      windows: ${{ steps.f.outputs.windows }}
+    steps:
+      - name: Compute matrix
+        id: f
+        env:
+          PLATFORMS: ${{ github.event_name == 'release' && 'all' || github.event.inputs.platforms }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PLATFORMS" ] || [ "$PLATFORMS" = "all" ]; then
+            PLATFORMS="linux_x86_64,linux_arm64,darwin_x86_64,darwin_arm64,windows_x86_64,windows_arm64"
+          fi
+          for os in linux darwin windows; do
+            list=$(echo "$PLATFORMS" | tr ',' '\n' | sed -n "s/^${os}_//p" | jq -Rcn '[inputs]' || echo '[]')
+            echo "${os}=${list}" | tee -a "$GITHUB_OUTPUT"
+          done
+
   build-linux:
+    needs: setup
+    if: ${{ needs.setup.outputs.linux != '[]' }}
     name: Build V8 for linux ${{ matrix.arch }}
-    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',linux_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
+        arch: ${{ fromJSON(needs.setup.outputs.linux) }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -64,12 +85,13 @@ jobs:
           gh release upload "$TAG" libv8-linux-${{ matrix.arch }}.a --clobber --repo "$GITHUB_REPOSITORY"
 
   build-darwin:
+    needs: setup
+    if: ${{ needs.setup.outputs.darwin != '[]' }}
     name: Build V8 for darwin ${{ matrix.arch }}
-    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',darwin_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
+        arch: ${{ fromJSON(needs.setup.outputs.darwin) }}
     # macos-15 ships Xcode 16+ with MacOSX15.sdk, which V8 14.x requires.
     # macos-14 (Xcode 15.x, SDK 14.5) fails gn gen with "No 15+ SDK found".
     runs-on: macos-15
@@ -97,12 +119,13 @@ jobs:
           gh release upload "$TAG" libv8-darwin-${{ matrix.arch }}.a --clobber --repo "$GITHUB_REPOSITORY"
 
   build-windows:
+    needs: setup
+    if: ${{ needs.setup.outputs.windows != '[]' }}
     name: Build V8 for windows ${{ matrix.arch }}
-    if: ${{ github.event_name == 'release' || github.event.inputs.platforms == 'all' || github.event.inputs.platforms == '' || contains(format(',{0},', github.event.inputs.platforms), format(',windows_{0},', matrix.arch)) }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
+        arch: ${{ fromJSON(needs.setup.outputs.windows) }}
     runs-on: windows-latest
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
