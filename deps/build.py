@@ -233,16 +233,20 @@ def main():
             return objs
 
         libcxx_objs = find_target_objs("libc++")
+        # libc++abi is Itanium-ABI only (Linux/macOS exception unwinding +
+        # RTTI). On Windows the MSVC C++ ABI is used, so libc++abi isn't a
+        # build target — vcruntime/ucrt provide its equivalents and they're
+        # already linked via the MSVC runtime. Empty libcxxabi_objs here is
+        # the expected case on Windows.
         libcxxabi_objs = find_target_objs("libc++abi")
         dest_fn = os.path.join(dest_path, 'libv8.lib')
         if os.path.exists(dest_fn):
             os.remove(dest_fn)
-        if not libcxx_objs or not libcxxabi_objs:
+        if not libcxx_objs:
             raise RuntimeError(
-                f"libc++/libc++abi target .obj files not found under "
-                f"{build_path}; libc++ count={len(libcxx_objs)} "
-                f"libc++abi count={len(libcxxabi_objs)}. Inspect the build "
-                f"output layout under obj/buildtools/third_party/ and update "
+                f"libc++ target .obj files not found under {build_path}. "
+                f"Inspect the build output layout under "
+                f"obj/buildtools/third_party/libc++/ and update "
                 f"find_target_objs() accordingly.")
         llvm_lib = os.path.join(v8_path, "third_party", "llvm-build",
                                 "Release+Asserts", "bin", "llvm-lib.exe")
