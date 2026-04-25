@@ -7,12 +7,6 @@ package v8go
 //go:generate clang-format -i --verbose -style=Chromium v8go.h v8go.cc
 
 // #cgo CXXFLAGS: -fno-rtti -fPIC -std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH -I${SRCDIR}/deps/include -Wall -Wno-comment -Wno-vla-cxx-extension
-// V8 builds with use_custom_libcxx=true, so its libc++ symbols live in the
-// std::__Cr inline namespace. Bindings must include the same custom libc++
-// headers so calls into V8 emit __Cr-mangled symbols that match libv8.a.
-// Without this, the system libc++ on Apple/Linux uses std::__1, the linker
-// can't find the symbols, and deskbot fails with "Undefined symbols" at
-// v8::JSON::Parse / v8::platform::NewDefaultPlatform.
 // #cgo linux CXXFLAGS: -stdlib=libc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo darwin CXXFLAGS: -stdlib=libc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo !windows LDFLAGS: -pthread -lv8
