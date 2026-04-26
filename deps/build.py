@@ -177,7 +177,17 @@ def main():
     # (std::bit_cast) that V8 14.x source uses. Linux arm64 cross builds
     # install g++-aarch64-linux-gnu which provides a modern libstdc++; macOS
     # uses the Xcode SDK; Windows uses the MSVC SDK via clang-cl.
-    use_sysroot = 'false'
+    #
+    # Exception: linux/arm64 cross-compile with use_custom_libcxx=false.
+    # Without bundled libc++, V8's source needs target std headers; gn does
+    # not point the cross-target compiler at /usr/aarch64-linux-gnu/include/c++,
+    # so bigint.h fails with "no template named 'unique_ptr' in namespace
+    # 'std'". Chromium's debian_*_arm64-sysroot ships a modern libstdc++
+    # that satisfies V8's C++20 needs. Set use_sysroot=true only for that
+    # combination so other paths are unaffected.
+    is_mac = target_os() == 'mac'
+    is_linux_arm64 = target_os() == 'linux' and args.arch == 'arm64'
+    use_sysroot = 'true' if is_linux_arm64 else 'false'
     # symbol_level = 1 includes line number information
     # symbol_level = 2 can be used for additional debug information, but it can increase the
     #   compiled library by an order of magnitude and further slow down compilation
@@ -202,8 +212,6 @@ def main():
     # the same system-libc++ path. Linux x86_64 and Windows keep custom
     # libc++ for now — they share the snapshot bytes via
     # deps/include_libcxx and have not exhibited the layout-mismatch crash.
-    is_mac = target_os() == 'mac'
-    is_linux_arm64 = target_os() == 'linux' and args.arch == 'arm64'
     bundle_libcxx = not (is_mac or is_linux_arm64)
     use_custom_libcxx = 'true' if bundle_libcxx else 'false'
     # PartitionAlloc's allocator shim (allocator_shim_apple.cc) redeclares

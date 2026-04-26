@@ -57,12 +57,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: ${{ fromJSON(needs.setup.outputs.linux) }}
-    # arm64 → native ubuntu-22.04-arm runner. Cross-compile from amd64 with
-    # g++-aarch64-linux-gnu fails for use_custom_libcxx=false builds because
-    # V8's gn places target libstdc++ headers at a path V8's source can't
-    # find ("no template named 'unique_ptr' in namespace 'std'" in
-    # bigint.h), and use_sysroot=false leaves no fallback.
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,6 +70,9 @@ jobs:
           git config --unset-all remote.origin.fetch || true
           git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
         shell: bash
+      - name: Install g++-aarch64-linux-gnu
+        if: matrix.arch == 'arm64'
+        run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu
       - name: Build V8
         run: cd deps && ./build.py --arch ${{ matrix.arch }}
       - name: Stage artifact
