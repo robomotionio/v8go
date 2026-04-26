@@ -351,14 +351,30 @@ def main():
                 # a path the glob missed). Loud failure forces us to fix
                 # find_target_archive.
                 #
-                # Dump every .a in the build dir so the CI log shows the
-                # actual cross-compile output paths and the glob can be
-                # widened in one shot.
+                # Dump every .a in the build dir + every .o under
+                # obj/buildtools/third_party/libc++ and ./libc++abi (target
+                # subdirs only — skip clang_*_v8_* host-tools mirror) so we
+                # can tell whether libc++ is built as static_library (.a)
+                # or source_set (.o) on this target. Linux x86_64 native
+                # gives .a; cross-compile likely gives .o (Windows pattern).
                 all_archives = sorted(glob.glob(
                     os.path.join(build_path, "**", "*.a"), recursive=True))
                 print(f"DEBUG: all .a files under {build_path}:", flush=True)
                 for p in all_archives:
                     print(f"  {p}", flush=True)
+
+                for sub in ("libc++", "libc++abi"):
+                    pat = os.path.join(
+                        build_path, "obj", "buildtools", "third_party", sub,
+                        "**", "*.o")
+                    target_objs = sorted(glob.glob(pat, recursive=True))
+                    print(f"DEBUG: target {sub} .o files "
+                          f"({len(target_objs)} files):", flush=True)
+                    for p in target_objs[:30]:  # cap for log readability
+                        print(f"  {p}", flush=True)
+                    if len(target_objs) > 30:
+                        print(f"  ... and {len(target_objs) - 30} more",
+                              flush=True)
                 raise RuntimeError(
                     f"libc++/libc++abi target archives not found under {build_path};"
                     f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
