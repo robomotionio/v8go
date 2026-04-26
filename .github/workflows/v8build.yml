@@ -74,16 +74,38 @@ jobs:
         if: matrix.arch == 'arm64'
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu
       # Cache the gn/ninja build dir so a failure in the post-ninja merge
-      # step (~seconds) doesn't waste the ~30-90 min compile on the next
-      # iteration. ninja sees its outputs up-to-date on a cache hit and
-      # finishes in seconds.
-      - name: Cache V8 build dir
-        uses: actions/cache@v4
+      # step doesn't waste the ~30-90 min compile on the next iteration.
+      # Split restore+save (vs single actions/cache@v4) so the post-job
+      # save runs even when the build job fails — by default actions/cache
+      # only saves on job success, which defeats the whole point of caching
+      # for merge-step iteration.
+      - name: Restore V8 build dir cache
+        id: cache-restore-linux
+        uses: actions/cache/restore@v4
         with:
           path: deps/.build/linux_${{ matrix.arch }}
           key: v8build-linux-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
       - name: Build V8
         run: cd deps && ./build.py --arch ${{ matrix.arch }}
+      - name: Save V8 build dir cache
+        if: always() && steps.cache-restore-linux.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/.build/linux_${{ matrix.arch }}
+          key: v8build-linux-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
+      # Belt-and-suspenders backup. If the cache evicts (10 GB scope cap)
+      # or actions/cache fails for any other reason, we still have the
+      # build dir as a workflow artifact for 7 days. To prime the cache
+      # from a saved artifact later: download it via gh CLI, gh actions
+      # cache push (or rerun a job that restores from it).
+      - name: Upload V8 build dir as artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8build-linux-${{ matrix.arch }}-${{ github.run_id }}
+          path: deps/.build/linux_${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: warn
       - name: Stage artifact
         run: cp deps/linux_${{ matrix.arch }}/libv8.a libv8-linux-${{ matrix.arch }}.a
       - name: Upload to release
@@ -121,13 +143,28 @@ jobs:
           git config --unset-all remote.origin.fetch || true
           git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
         shell: bash
-      - name: Cache V8 build dir
-        uses: actions/cache@v4
+      - name: Restore V8 build dir cache
+        id: cache-restore-darwin
+        uses: actions/cache/restore@v4
         with:
           path: deps/.build/darwin_${{ matrix.arch }}
           key: v8build-darwin-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
       - name: Build V8
         run: cd deps && ./build.py --arch ${{ matrix.arch }}
+      - name: Save V8 build dir cache
+        if: always() && steps.cache-restore-darwin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/.build/darwin_${{ matrix.arch }}
+          key: v8build-darwin-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
+      - name: Upload V8 build dir as artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8build-darwin-${{ matrix.arch }}-${{ github.run_id }}
+          path: deps/.build/darwin_${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: warn
       - name: Stage artifact
         run: cp deps/darwin_${{ matrix.arch }}/libv8.a libv8-darwin-${{ matrix.arch }}.a
       - name: Upload to release
@@ -175,8 +212,9 @@ jobs:
       # writes happen even when the job fails, so a failure at the merge
       # step still preserves the build dir for the next iteration.
       # Bump the suffix to manually invalidate.
-      - name: Cache V8 build dir
-        uses: actions/cache@v4
+      - name: Restore V8 build dir cache
+        id: cache-restore-windows
+        uses: actions/cache/restore@v4
         with:
           path: deps/.build/windows_${{ matrix.arch }}
           key: v8build-windows-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
@@ -185,6 +223,20 @@ jobs:
         run: |
           cd deps
           python build.py --arch ${{ matrix.arch }}
+      - name: Save V8 build dir cache
+        if: always() && steps.cache-restore-windows.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/.build/windows_${{ matrix.arch }}
+          key: v8build-windows-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
+      - name: Upload V8 build dir as artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8build-windows-${{ matrix.arch }}-${{ github.run_id }}
+          path: deps/.build/windows_${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: warn
       - name: Stage artifact
         shell: cmd
         run: copy deps\windows_${{ matrix.arch }}\libv8.lib libv8-windows-${{ matrix.arch }}.lib
