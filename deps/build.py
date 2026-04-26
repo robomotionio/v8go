@@ -3,7 +3,6 @@ import platform
 import os
 import subprocess
 import shutil
-import sys
 import argparse
 
 valid_archs = ['arm64', 'x86_64']
@@ -178,17 +177,7 @@ def main():
     # (std::bit_cast) that V8 14.x source uses. Linux arm64 cross builds
     # install g++-aarch64-linux-gnu which provides a modern libstdc++; macOS
     # uses the Xcode SDK; Windows uses the MSVC SDK via clang-cl.
-    #
-    # Exception: linux/arm64 cross-compile with use_custom_libcxx=false.
-    # Without bundled libc++, V8's source needs target std headers; gn does
-    # not point the cross-target compiler at /usr/aarch64-linux-gnu/include/c++,
-    # so bigint.h fails with "no template named 'unique_ptr' in namespace
-    # 'std'". Chromium's debian_*_arm64-sysroot ships a modern libstdc++
-    # that satisfies V8's C++20 needs. Set use_sysroot=true only for that
-    # combination so other paths are unaffected.
-    is_mac = target_os() == 'mac'
-    is_linux_arm64 = target_os() == 'linux' and args.arch == 'arm64'
-    use_sysroot = 'true' if is_linux_arm64 else 'false'
+    use_sysroot = 'false'
     # symbol_level = 1 includes line number information
     # symbol_level = 2 can be used for additional debug information, but it can increase the
     #   compiled library by an order of magnitude and further slow down compilation
@@ -203,18 +192,11 @@ def main():
     # boundary (see robomotion-deskbot/docs/v8go-mac-problem.md). Flipping
     # darwin to use_custom_libcxx=false makes libv8.a reference plain
     # std::__1::* symbols that resolve cleanly against the system
-    # libc++.dylib at link time.
-    #
-    # linux/arm64 hits the analogous problem (see
-    # robomotion-deskbot/docs/v8go-linux-arm-problem.md): the cross-compile
-    # merge step on the linux/amd64 v8build runner silently drops
-    # libc++.a/libc++abi.a so the published asset is missing
-    # __libcpp_verbose_abort and other libc++ runtime defs. Flip arm64 to
-    # the same system-libc++ path. Linux x86_64 and Windows keep custom
-    # libc++ for now — they share the snapshot bytes via
-    # deps/include_libcxx and have not exhibited the layout-mismatch crash.
-    bundle_libcxx = not (is_mac or is_linux_arm64)
-    use_custom_libcxx = 'true' if bundle_libcxx else 'false'
+    # libc++.dylib at link time. Linux and Windows keep custom libc++ for
+    # now — they share the snapshot bytes via deps/include_libcxx and have
+    # not exhibited the layout-mismatch crash.
+    is_mac = target_os() == 'mac'
+    use_custom_libcxx = 'false' if is_mac else 'true'
     # PartitionAlloc's allocator shim (allocator_shim_apple.cc) redeclares
     # global operator new/delete with hidden visibility (-fvisibility-global-
     # new-delete=force-hidden). With use_custom_libcxx=true that matches
@@ -231,19 +213,6 @@ def main():
                         use_custom_libcxx, use_allocator_shim,
                         use_sysroot, symbol_level, strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
-
-    # use_sysroot=true requires the per-arch debian sysroot to be downloaded
-    # under v8/build/linux/debian_*-arm64-sysroot. gclient sync doesn't pull
-    # cross sysroots automatically — install-sysroot.py is the documented
-    # bootstrap path (gn errors with the same instruction in its message).
-    if use_sysroot == 'true' and target_os() == 'linux':
-        sysroot_script = os.path.join(
-            v8_path, "build", "linux", "sysroot_scripts", "install-sysroot.py")
-        if os.path.exists(sysroot_script):
-            print(f"installing arm64 sysroot via {sysroot_script}")
-            subprocess.check_call(
-                [sys.executable, sysroot_script, "--arch=" + args.arch],
-                cwd=v8_path, env=env)
 
     subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
                         cwd=v8_path,
@@ -366,14 +335,13 @@ def main():
                                "Release+Asserts", "bin", "llvm-ar")
         if not os.path.exists(llvm_ar):
             llvm_ar = "ar"
-        if not bundle_libcxx:
-            # darwin and linux/arm64 build with use_custom_libcxx=false
-            # (see main()) — V8 produces no separate libc++.a / libc++abi.a
-            # target archives, and libv8.a's std::__1::* references resolve
-            # at link time against the system libc++ in the consumer.
+        if target_os() == 'mac':
+            # darwin builds with use_custom_libcxx=false (see main()) — V8
+            # produces no separate libc++.a / libc++abi.a target archives,
+            # and libv8.a's std::__1::* references resolve at link time
+            # against the system /usr/lib/libc++.dylib in the consumer.
             # Just hand v8_monolith.a through as libv8.a.
-            print(f"{target_os()}/{args.arch}: system libc++; "
-                  "copying v8_monolith.a to libv8.a")
+            print("darwin: system libc++; copying v8_monolith.a to libv8.a")
             shutil.copy(monolith, dest_fn)
         else:
             if not libcxx or not libcxxabi:
