@@ -53,7 +53,7 @@ target_cpu="%s"
 v8_target_cpu="%s"
 target_os="%s"
 clang_use_chrome_plugins=false
-use_custom_libcxx=true
+use_custom_libcxx=%s
 use_sysroot=%s
 symbol_level=%s
 strip_debug_info=%s
@@ -183,9 +183,23 @@ def main():
     symbol_level = 1 if args.debug else 0
     strip_debug_info = 'false' if args.debug else 'true'
 
+    # On macOS the bindings consume Apple's system libc++ (the std::__1
+    # inline namespace). Building V8 with use_custom_libcxx=true gives us a
+    # std::__Cr-namespaced libc++ embedded in libv8.a — same mangled symbols
+    # as bindings (after a __config_site rename) but a *different*
+    # implementation, which produced silent layout mismatches at the cgo
+    # boundary (see robomotion-deskbot/docs/v8go-mac-problem.md). Flipping
+    # darwin to use_custom_libcxx=false makes libv8.a reference plain
+    # std::__1::* symbols that resolve cleanly against the system
+    # libc++.dylib at link time. Linux and Windows keep custom libc++ for
+    # now — they share the snapshot bytes via deps/include_libcxx and have
+    # not exhibited the layout-mismatch crash.
+    use_custom_libcxx = 'false' if target_os() == 'mac' else 'true'
+
     arch = v8_arch()
     gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
-                        use_sysroot, symbol_level, strip_debug_info)
+                        use_custom_libcxx, use_sysroot, symbol_level,
+                        strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
 
     subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
@@ -309,29 +323,39 @@ def main():
                                "Release+Asserts", "bin", "llvm-ar")
         if not os.path.exists(llvm_ar):
             llvm_ar = "ar"
-        if not libcxx or not libcxxabi:
-            # Hard fail rather than silently produce a broken archive — the
-            # silent-fallback path historically shipped a Mac-Intel libv8.a
-            # with 0 __Cr symbols (cross-compile output went to a path the
-            # glob missed). Loud failure forces us to fix find_target_archive.
-            raise RuntimeError(
-                f"libc++/libc++abi target archives not found under {build_path};"
-                f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
-                f" output layout (likely a cross-compile path the glob missed)"
-                f" and update find_target_archive() accordingly.")
-        print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
-              "into libv8.a")
-        script = (
-            "CREATE {dest}\n"
-            "ADDLIB {monolith}\n"
-            "ADDLIB {libcxx}\n"
-            "ADDLIB {libcxxabi}\n"
-            "SAVE\n"
-            "END\n"
-        ).format(dest=dest_fn, monolith=monolith,
-                 libcxx=libcxx, libcxxabi=libcxxabi)
-        subprocess.run([llvm_ar, "-M"], input=script, text=True,
-                       check=True)
+        if target_os() == 'mac':
+            # darwin builds with use_custom_libcxx=false (see main()) — V8
+            # produces no separate libc++.a / libc++abi.a target archives,
+            # and libv8.a's std::__1::* references resolve at link time
+            # against the system /usr/lib/libc++.dylib in the consumer.
+            # Just hand v8_monolith.a through as libv8.a.
+            print("darwin: system libc++; copying v8_monolith.a to libv8.a")
+            shutil.copy(monolith, dest_fn)
+        else:
+            if not libcxx or not libcxxabi:
+                # Hard fail rather than silently produce a broken archive —
+                # the silent-fallback path historically shipped a Mac-Intel
+                # libv8.a with 0 __Cr symbols (cross-compile output went to
+                # a path the glob missed). Loud failure forces us to fix
+                # find_target_archive.
+                raise RuntimeError(
+                    f"libc++/libc++abi target archives not found under {build_path};"
+                    f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
+                    f" output layout (likely a cross-compile path the glob missed)"
+                    f" and update find_target_archive() accordingly.")
+            print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
+                  "into libv8.a")
+            script = (
+                "CREATE {dest}\n"
+                "ADDLIB {monolith}\n"
+                "ADDLIB {libcxx}\n"
+                "ADDLIB {libcxxabi}\n"
+                "SAVE\n"
+                "END\n"
+            ).format(dest=dest_fn, monolith=monolith,
+                     libcxx=libcxx, libcxxabi=libcxxabi)
+            subprocess.run([llvm_ar, "-M"], input=script, text=True,
+                           check=True)
         # llvm-ar writes a symbol index by default; no separate ranlib pass.
 
 
