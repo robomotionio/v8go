@@ -350,6 +350,15 @@ def main():
                 # libv8.a with 0 __Cr symbols (cross-compile output went to
                 # a path the glob missed). Loud failure forces us to fix
                 # find_target_archive.
+                #
+                # Dump every .a in the build dir so the CI log shows the
+                # actual cross-compile output paths and the glob can be
+                # widened in one shot.
+                all_archives = sorted(glob.glob(
+                    os.path.join(build_path, "**", "*.a"), recursive=True))
+                print(f"DEBUG: all .a files under {build_path}:", flush=True)
+                for p in all_archives:
+                    print(f"  {p}", flush=True)
                 raise RuntimeError(
                     f"libc++/libc++abi target archives not found under {build_path};"
                     f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
