@@ -53,10 +53,8 @@ target_cpu="%s"
 v8_target_cpu="%s"
 target_os="%s"
 clang_use_chrome_plugins=false
-use_custom_libcxx=false
-use_allocator_shim=false
-use_perfetto=false
-v8_enable_pointer_compression=true
+use_custom_libcxx=%s
+use_allocator_shim=%s
 use_sysroot=%s
 symbol_level=%s
 strip_debug_info=%s
@@ -186,24 +184,33 @@ def main():
     symbol_level = 1 if args.debug else 0
     strip_debug_info = 'false' if args.debug else 'true'
 
-    # gn_args is configured for "V8 as a library" (Node.js / v8go-style
-    # embedders), not "Chromium component". Specifically:
-    #   - use_custom_libcxx=false: V8 builds against the host C++ stdlib
-    #     (Apple libc++ on darwin, apt's libc++ on Linux, MSVC STL on
-    #     Windows) — same library used by the cgo bindings, so types
-    #     crossing the cgo boundary share one implementation. Avoids the
-    #     "same mangled name, different layout" bug that crashed deskbot
-    #     on Mac (see robomotion-deskbot/docs/v8go-mac-problem.md).
-    #   - use_allocator_shim=false: skip PartitionAlloc's process-wide
-    #     malloc/operator-new interception. V8 still uses PA internally
-    #     for its own heap data structures via partition_alloc::* APIs;
-    #     we just don't reroute every cgo/libc malloc call through PA.
-    #   - use_perfetto=false: drop Perfetto tracing protobufs. V8's bare
-    #     trace event API still works.
-    #   - v8_enable_pointer_compression=true: must match the bindings'
-    #     V8_COMPRESS_POINTERS define in cgo.go.
+    # On macOS the bindings consume Apple's system libc++ (the std::__1
+    # inline namespace). Building V8 with use_custom_libcxx=true gives us a
+    # std::__Cr-namespaced libc++ embedded in libv8.a — same mangled symbols
+    # as bindings (after a __config_site rename) but a *different*
+    # implementation, which produced silent layout mismatches at the cgo
+    # boundary (see robomotion-deskbot/docs/v8go-mac-problem.md). Flipping
+    # darwin to use_custom_libcxx=false makes libv8.a reference plain
+    # std::__1::* symbols that resolve cleanly against the system
+    # libc++.dylib at link time. Linux and Windows keep custom libc++ for
+    # now — they share the snapshot bytes via deps/include_libcxx and have
+    # not exhibited the layout-mismatch crash.
+    is_mac = target_os() == 'mac'
+    use_custom_libcxx = 'false' if is_mac else 'true'
+    # PartitionAlloc's allocator shim (allocator_shim_apple.cc) redeclares
+    # global operator new/delete with hidden visibility (-fvisibility-global-
+    # new-delete=force-hidden). With use_custom_libcxx=true that matches
+    # Chromium libc++'s declarations; with system Apple libc++ those
+    # operators are declared with default visibility, which clang rejects
+    # ("visibility does not match previous declaration"). The shim is
+    # process-wide allocation interception we don't use anyway — V8 still
+    # uses partition_alloc internally for its own data structures
+    # regardless of this flag. Node.js builds V8 the same way.
+    use_allocator_shim = 'false' if is_mac else 'true'
+
     arch = v8_arch()
     gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
+                        use_custom_libcxx, use_allocator_shim,
                         use_sysroot, symbol_level, strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
 
@@ -218,21 +225,150 @@ def main():
     if not os.path.exists(dest_path):
         os.makedirs(dest_path)
 
-    # With use_custom_libcxx=false, V8 doesn't build a separate libc++
-    # archive — the monolith just has unresolved std::* symbol references
-    # that the consumer (cgo bindings) resolves at link time against the
-    # host's libc++ (Linux/macOS) or MSVC STL (Windows). No libc++ merge
-    # needed; just rename the monolith.
     if is_windows:
-        monolith_name, dest_name = 'v8_monolith.lib', 'libv8.lib'
+        # On Windows v8_monolith.lib is just the V8 objects — Chromium's
+        # use_custom_libcxx=true builds libc++ and libc++abi as `source_set`
+        # targets (loose .obj files at obj/buildtools/third_party/libc++/
+        # libc++/*.obj — note the doubled libc++/libc++/), NOT static_library
+        # targets. So unlike Linux/macOS there's no libc++.a/lib to point at;
+        # we have to glob the individual .obj files and merge them into
+        # libv8.lib via llvm-lib /OUT (which accepts a mix of .lib + .obj
+        # inputs and produces a single .lib union).
+        #
+        # Without this merge, downstream consumers compiling cgo bindings
+        # against the bundled libc++ headers (std::__Cr namespace) get
+        # thousands of unresolved external symbol errors at link time for
+        # std::__Cr::cerr, basic_string ctors, __libcpp_verbose_abort,
+        # basic_streambuf vtables, etc. — all referenced from inside
+        # v8_monolith.lib but defined in the libc++ .obj files.
+        #
+        # Output is named libv8.lib for naming consistency with libv8.a (the
+        # unix archive).
+        import glob
+        monolith = os.path.join(build_path, "obj", "v8_monolith.lib")
+
+        def find_target_objs(name):
+            # libc++ source_set output: obj/buildtools/third_party/<name>/<name>/*.obj
+            objs = []
+            for path in glob.glob(os.path.join(
+                    build_path, "**", "buildtools", "third_party",
+                    name, name, "*.obj"), recursive=True):
+                if "/clang_" in path.replace("\\", "/") and "_v8_" in path:
+                    continue
+                objs.append(path)
+            return objs
+
+        libcxx_objs = find_target_objs("libc++")
+        # libc++abi is Itanium-ABI only (Linux/macOS exception unwinding +
+        # RTTI). On Windows the MSVC C++ ABI is used, so libc++abi isn't a
+        # build target — vcruntime/ucrt provide its equivalents and they're
+        # already linked via the MSVC runtime. Empty libcxxabi_objs here is
+        # the expected case on Windows.
+        libcxxabi_objs = find_target_objs("libc++abi")
+        dest_fn = os.path.join(dest_path, 'libv8.lib')
+        if os.path.exists(dest_fn):
+            os.remove(dest_fn)
+        if not libcxx_objs:
+            raise RuntimeError(
+                f"libc++ target .obj files not found under {build_path}. "
+                f"Inspect the build output layout under "
+                f"obj/buildtools/third_party/libc++/ and update "
+                f"find_target_objs() accordingly.")
+        # Chromium's bundled LLVM doesn't ship llvm-lib.exe; use lld-link.exe
+        # in /lib mode instead — this is the same tool V8 itself uses to
+        # produce v8_monolith.lib (visible in the ninja log as
+        # `lld-link.exe /lib "/OUT:obj/v8_monolith.lib" ... "@obj/v8_monolith.lib.rsp"`).
+        lld_link = os.path.join(v8_path, "third_party", "llvm-build",
+                                "Release+Asserts", "bin", "lld-link.exe")
+        if not os.path.exists(lld_link):
+            raise RuntimeError(
+                f"lld-link.exe not found at {lld_link}; expected as part of "
+                f"V8's bundled Chromium LLVM toolchain.")
+        print(f"merging {len(libcxx_objs)} libc++ + {len(libcxxabi_objs)} "
+              f"libc++abi .obj files into libv8.lib via lld-link /lib")
+        # Use a response file (@file) for the input list — Windows CMD has an
+        # 8192 char command line limit and 50+ .obj paths can exceed it. V8
+        # itself uses response files for the same reason. Each path goes on
+        # its own line; backslashes are fine, no escaping needed for the
+        # paths we generate.
+        rsp_path = os.path.join(build_path, "libv8.rsp")
+        with open(rsp_path, "w") as rsp:
+            rsp.write(monolith + "\n")
+            for obj in libcxx_objs + libcxxabi_objs:
+                rsp.write(obj + "\n")
+        subprocess.check_call(
+            [lld_link, "/lib", "/nologo", "/OUT:" + dest_fn,
+             "@" + rsp_path])
     else:
-        monolith_name, dest_name = 'libv8_monolith.a', 'libv8.a'
-    monolith = os.path.join(build_path, "obj", monolith_name)
-    dest_fn = os.path.join(dest_path, dest_name)
-    if os.path.exists(dest_fn):
-        os.remove(dest_fn)
-    print(f"copying {monolith_name} -> {dest_name}")
-    shutil.copy(monolith, dest_fn)
+        # V8's bundled libc++ and libc++abi live in separate archives that
+        # v8_monolith links against at final-binary link time. v8go's
+        # consumers link with system libstdc++, so we bundle the libc++
+        # .o files into libv8.a here to keep it self-contained. The libc++
+        # symbols live in std::__Cr::... so they don't collide with
+        # libstdc++'s std::.
+        import glob
+        monolith = os.path.join(build_path, "obj", "libv8_monolith.a")
+        # libc++.a and libc++abi.a are produced for the *target*. On native
+        # builds they live at obj/buildtools/third_party/libc++/libc++.a;
+        # on cross-compiles (e.g. darwin arm64 host -> x86_64 target) the
+        # path can shift. Glob to find the target archive (skip any
+        # clang_*_v8_* host-tool subdirs).
+        def find_target_archive(name):
+            matches = []
+            for path in glob.glob(os.path.join(
+                    build_path, "**", "buildtools", "third_party",
+                    name, name + ".a"), recursive=True):
+                # Skip the host-tools mirror (e.g. clang_arm64_v8_x64/...).
+                if "/clang_" in path.replace("\\", "/") and "_v8_" in path:
+                    continue
+                matches.append(path)
+            return matches[0] if matches else None
+
+        libcxx = find_target_archive("libc++")
+        libcxxabi = find_target_archive("libc++abi")
+        dest_fn = os.path.join(dest_path, 'libv8.a')
+        if os.path.exists(dest_fn):
+            os.remove(dest_fn)
+        # MRI-scripted archive merge. macOS's BSD ar doesn't support -M, so
+        # we always use V8's bundled llvm-ar (also used by V8's own build).
+        llvm_ar = os.path.join(v8_path, "third_party", "llvm-build",
+                               "Release+Asserts", "bin", "llvm-ar")
+        if not os.path.exists(llvm_ar):
+            llvm_ar = "ar"
+        if target_os() == 'mac':
+            # darwin builds with use_custom_libcxx=false (see main()) — V8
+            # produces no separate libc++.a / libc++abi.a target archives,
+            # and libv8.a's std::__1::* references resolve at link time
+            # against the system /usr/lib/libc++.dylib in the consumer.
+            # Just hand v8_monolith.a through as libv8.a.
+            print("darwin: system libc++; copying v8_monolith.a to libv8.a")
+            shutil.copy(monolith, dest_fn)
+        else:
+            if not libcxx or not libcxxabi:
+                # Hard fail rather than silently produce a broken archive —
+                # the silent-fallback path historically shipped a Mac-Intel
+                # libv8.a with 0 __Cr symbols (cross-compile output went to
+                # a path the glob missed). Loud failure forces us to fix
+                # find_target_archive.
+                raise RuntimeError(
+                    f"libc++/libc++abi target archives not found under {build_path};"
+                    f" libc++={libcxx} libc++abi={libcxxabi}. Inspect the build"
+                    f" output layout (likely a cross-compile path the glob missed)"
+                    f" and update find_target_archive() accordingly.")
+            print(f"merging libc++ ({libcxx}) and libc++abi ({libcxxabi}) "
+                  "into libv8.a")
+            script = (
+                "CREATE {dest}\n"
+                "ADDLIB {monolith}\n"
+                "ADDLIB {libcxx}\n"
+                "ADDLIB {libcxxabi}\n"
+                "SAVE\n"
+                "END\n"
+            ).format(dest=dest_fn, monolith=monolith,
+                     libcxx=libcxx, libcxxabi=libcxxabi)
+            subprocess.run([llvm_ar, "-M"], input=script, text=True,
+                           check=True)
+        # llvm-ar writes a symbol index by default; no separate ranlib pass.
 
 
 if __name__ == "__main__":
