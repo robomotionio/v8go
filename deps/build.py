@@ -54,6 +54,7 @@ v8_target_cpu="%s"
 target_os="%s"
 clang_use_chrome_plugins=false
 use_custom_libcxx=%s
+use_allocator_shim=%s
 use_sysroot=%s
 symbol_level=%s
 strip_debug_info=%s
@@ -194,12 +195,23 @@ def main():
     # libc++.dylib at link time. Linux and Windows keep custom libc++ for
     # now — they share the snapshot bytes via deps/include_libcxx and have
     # not exhibited the layout-mismatch crash.
-    use_custom_libcxx = 'false' if target_os() == 'mac' else 'true'
+    is_mac = target_os() == 'mac'
+    use_custom_libcxx = 'false' if is_mac else 'true'
+    # PartitionAlloc's allocator shim (allocator_shim_apple.cc) redeclares
+    # global operator new/delete with hidden visibility (-fvisibility-global-
+    # new-delete=force-hidden). With use_custom_libcxx=true that matches
+    # Chromium libc++'s declarations; with system Apple libc++ those
+    # operators are declared with default visibility, which clang rejects
+    # ("visibility does not match previous declaration"). The shim is
+    # process-wide allocation interception we don't use anyway — V8 still
+    # uses partition_alloc internally for its own data structures
+    # regardless of this flag. Node.js builds V8 the same way.
+    use_allocator_shim = 'false' if is_mac else 'true'
 
     arch = v8_arch()
     gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
-                        use_custom_libcxx, use_sysroot, symbol_level,
-                        strip_debug_info)
+                        use_custom_libcxx, use_allocator_shim,
+                        use_sysroot, symbol_level, strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
 
     subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
