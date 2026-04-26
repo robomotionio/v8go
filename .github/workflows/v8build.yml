@@ -73,6 +73,15 @@ jobs:
       - name: Install g++-aarch64-linux-gnu
         if: matrix.arch == 'arm64'
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu
+      # Cache the gn/ninja build dir so a failure in the post-ninja merge
+      # step (~seconds) doesn't waste the ~30-90 min compile on the next
+      # iteration. ninja sees its outputs up-to-date on a cache hit and
+      # finishes in seconds.
+      - name: Cache V8 build dir
+        uses: actions/cache@v4
+        with:
+          path: deps/.build/linux_${{ matrix.arch }}
+          key: v8build-linux-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
       - name: Build V8
         run: cd deps && ./build.py --arch ${{ matrix.arch }}
       - name: Stage artifact
@@ -112,6 +121,11 @@ jobs:
           git config --unset-all remote.origin.fetch || true
           git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
         shell: bash
+      - name: Cache V8 build dir
+        uses: actions/cache@v4
+        with:
+          path: deps/.build/darwin_${{ matrix.arch }}
+          key: v8build-darwin-${{ matrix.arch }}-${{ hashFiles('deps/v8_version') }}-v1
       - name: Build V8
         run: cd deps && ./build.py --arch ${{ matrix.arch }}
       - name: Stage artifact
