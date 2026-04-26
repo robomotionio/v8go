@@ -148,25 +148,42 @@ def target_os():
     return "linux"
 
 def main():
-    v8deps()
-    apply_local_patches()
-
-    # On Windows depot_tools ships gn/ninja as .bat wrappers that shell out to
-    # the cipd-installed binaries; on Linux/macOS it ships posix shell wrappers
-    # with no extension. There is no `gn.exe` at the root.
-    gn_path = os.path.join(tools_path, "gn.bat" if is_windows else "gn")
-    assert os.path.exists(gn_path), f"gn not found at {gn_path}"
-    ninja_path = os.path.join(tools_path, "ninja.bat" if is_windows else "ninja")
-    if not os.path.exists(ninja_path) and is_windows:
-        # Older depot_tools on Windows had `ninja.exe` directly; newer switched
-        # to a bat wrapper. Fall back if needed.
-        ninja_path = os.path.join(tools_path, "ninja.exe")
-    assert os.path.exists(ninja_path), f"ninja not found at {ninja_path}"
-
     build_path = os.path.join(deps_path, ".build", os_arch())
-    env = os.environ.copy()
-    if is_windows:
-        env.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
+    monolith_obj = "v8_monolith.lib" if is_windows else "libv8_monolith.a"
+    monolith_path = os.path.join(build_path, "obj", monolith_obj)
+
+    # Fast path: if a previous run cached <build_path> and v8_monolith was
+    # built successfully, skip the entire gclient sync + gn gen + ninja
+    # pipeline (which recompiles from scratch because gclient touches v8/
+    # source mtimes — even with actions/cache restoring .build/, ninja
+    # invalidates everything). Just go to the merge step. This makes
+    # iterating on the merge logic fast (~seconds vs ~90 min).
+    skip_compile = os.path.exists(monolith_path)
+    if skip_compile:
+        print(f"FAST PATH: {monolith_path} exists from cache; "
+              "skipping gclient sync + gn gen + ninja", flush=True)
+        gn_path = ninja_path = None  # not needed
+        env = os.environ.copy()
+    else:
+        v8deps()
+        apply_local_patches()
+
+        # On Windows depot_tools ships gn/ninja as .bat wrappers that shell out
+        # to the cipd-installed binaries; on Linux/macOS it ships posix shell
+        # wrappers with no extension. There is no `gn.exe` at the root.
+        gn_path = os.path.join(tools_path, "gn.bat" if is_windows else "gn")
+        assert os.path.exists(gn_path), f"gn not found at {gn_path}"
+        ninja_path = os.path.join(tools_path,
+                                  "ninja.bat" if is_windows else "ninja")
+        if not os.path.exists(ninja_path) and is_windows:
+            # Older depot_tools on Windows had `ninja.exe` directly; newer
+            # switched to a bat wrapper. Fall back if needed.
+            ninja_path = os.path.join(tools_path, "ninja.exe")
+        assert os.path.exists(ninja_path), f"ninja not found at {ninja_path}"
+
+        env = os.environ.copy()
+        if is_windows:
+            env.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
 
     is_debug = 'true' if args.debug else 'false'
     # V8 14.x only builds with clang on all platforms (MSVC support was removed
@@ -209,17 +226,17 @@ def main():
     use_allocator_shim = 'false' if is_mac else 'true'
 
     arch = v8_arch()
-    gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
-                        use_custom_libcxx, use_allocator_shim,
-                        use_sysroot, symbol_level, strip_debug_info)
-    gen_args = gnargs.replace('\n', ' ')
+    if not skip_compile:
+        gnargs = gn_args % (is_debug, is_clang, arch, arch, target_os(),
+                            use_custom_libcxx, use_allocator_shim,
+                            use_sysroot, symbol_level, strip_debug_info)
+        gen_args = gnargs.replace('\n', ' ')
 
-    subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
-                        cwd=v8_path,
-                        env=env)
-    subprocess.check_call([ninja_path, "-v", "-C", build_path, "v8_monolith"],
-                        cwd=v8_path,
-                        env=env)
+        subprocess.check_call(
+            cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
+            cwd=v8_path, env=env)
+        subprocess.check_call([ninja_path, "-v", "-C", build_path, "v8_monolith"],
+                              cwd=v8_path, env=env)
 
     dest_path = os.path.join(deps_path, os_arch())
     if not os.path.exists(dest_path):
