@@ -8,7 +8,8 @@ package v8go
 
 // #cgo CXXFLAGS: -fno-rtti -std=c++20 -DV8_COMPRESS_POINTERS -DV8_31BIT_SMIS_ON_64BIT_ARCH -I${SRCDIR}/deps/include -Wall -Wno-comment -Wno-vla-cxx-extension
 // #cgo !windows CXXFLAGS: -fPIC
-// #cgo linux CXXFLAGS: -stdlib=libc++ -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
+// #cgo linux CXXFLAGS: -stdlib=libc++
+// #cgo linux,amd64 CXXFLAGS: -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo darwin CXXFLAGS: -stdlib=libc++
 // #cgo windows CXXFLAGS: -I${SRCDIR}/deps/include_libcxx -I${SRCDIR}/deps/include_libcxxabi -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
 // #cgo !windows LDFLAGS: -pthread -lv8

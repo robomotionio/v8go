@@ -192,11 +192,20 @@ def main():
     # boundary (see robomotion-deskbot/docs/v8go-mac-problem.md). Flipping
     # darwin to use_custom_libcxx=false makes libv8.a reference plain
     # std::__1::* symbols that resolve cleanly against the system
-    # libc++.dylib at link time. Linux and Windows keep custom libc++ for
-    # now — they share the snapshot bytes via deps/include_libcxx and have
-    # not exhibited the layout-mismatch crash.
+    # libc++.dylib at link time.
+    #
+    # linux/arm64 hits the analogous problem (see
+    # robomotion-deskbot/docs/v8go-linux-arm-problem.md): the cross-compile
+    # merge step on the linux/amd64 v8build runner silently drops
+    # libc++.a/libc++abi.a so the published asset is missing
+    # __libcpp_verbose_abort and other libc++ runtime defs. Flip arm64 to
+    # the same system-libc++ path. Linux x86_64 and Windows keep custom
+    # libc++ for now — they share the snapshot bytes via
+    # deps/include_libcxx and have not exhibited the layout-mismatch crash.
     is_mac = target_os() == 'mac'
-    use_custom_libcxx = 'false' if is_mac else 'true'
+    is_linux_arm64 = target_os() == 'linux' and args.arch == 'arm64'
+    bundle_libcxx = not (is_mac or is_linux_arm64)
+    use_custom_libcxx = 'true' if bundle_libcxx else 'false'
     # PartitionAlloc's allocator shim (allocator_shim_apple.cc) redeclares
     # global operator new/delete with hidden visibility (-fvisibility-global-
     # new-delete=force-hidden). With use_custom_libcxx=true that matches
@@ -335,13 +344,14 @@ def main():
                                "Release+Asserts", "bin", "llvm-ar")
         if not os.path.exists(llvm_ar):
             llvm_ar = "ar"
-        if target_os() == 'mac':
-            # darwin builds with use_custom_libcxx=false (see main()) — V8
-            # produces no separate libc++.a / libc++abi.a target archives,
-            # and libv8.a's std::__1::* references resolve at link time
-            # against the system /usr/lib/libc++.dylib in the consumer.
+        if not bundle_libcxx:
+            # darwin and linux/arm64 build with use_custom_libcxx=false
+            # (see main()) — V8 produces no separate libc++.a / libc++abi.a
+            # target archives, and libv8.a's std::__1::* references resolve
+            # at link time against the system libc++ in the consumer.
             # Just hand v8_monolith.a through as libv8.a.
-            print("darwin: system libc++; copying v8_monolith.a to libv8.a")
+            print(f"{target_os()}/{args.arch}: system libc++; "
+                  "copying v8_monolith.a to libv8.a")
             shutil.copy(monolith, dest_fn)
         else:
             if not libcxx or not libcxxabi:
