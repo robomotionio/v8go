@@ -3,6 +3,7 @@ import platform
 import os
 import subprocess
 import shutil
+import sys
 import argparse
 
 valid_archs = ['arm64', 'x86_64']
@@ -230,6 +231,19 @@ def main():
                         use_custom_libcxx, use_allocator_shim,
                         use_sysroot, symbol_level, strip_debug_info)
     gen_args = gnargs.replace('\n', ' ')
+
+    # use_sysroot=true requires the per-arch debian sysroot to be downloaded
+    # under v8/build/linux/debian_*-arm64-sysroot. gclient sync doesn't pull
+    # cross sysroots automatically — install-sysroot.py is the documented
+    # bootstrap path (gn errors with the same instruction in its message).
+    if use_sysroot == 'true' and target_os() == 'linux':
+        sysroot_script = os.path.join(
+            v8_path, "build", "linux", "sysroot_scripts", "install-sysroot.py")
+        if os.path.exists(sysroot_script):
+            print(f"installing arm64 sysroot via {sysroot_script}")
+            subprocess.check_call(
+                [sys.executable, sysroot_script, "--arch=" + args.arch],
+                cwd=v8_path, env=env)
 
     subprocess.check_call(cmd([gn_path, "gen", build_path, "--args=" + gen_args]),
                         cwd=v8_path,
