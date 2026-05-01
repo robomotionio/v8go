@@ -133,6 +133,23 @@ typedef struct {
   size_t number_of_detached_contexts;
 } IsolateHStatistics;
 
+// IsolateOptions surfaces v8::Isolate::CreateParams::constraints to Go.
+// Zero in any field means "use V8 default".
+//
+// initial_old_space_bytes does NOT cause V8 to eagerly commit pages — it
+// is purely a "don't trigger GC until the heap reaches this size" hint
+// (see V8 14.x Heap::ConfigureHeap). To force eager commit so that the
+// OS hands out pages while system memory is still plentiful, use
+// IsolateWarmupOldGenerationHeap below.
+//
+// max_old_space_bytes / max_young_space_bytes do work as you'd expect —
+// they bound the heap. See docs/v8-windows-oom.md for the analysis.
+typedef struct {
+  size_t initial_old_space_bytes;
+  size_t max_old_space_bytes;
+  size_t max_young_space_bytes;
+} IsolateOptions;
+
 typedef struct {
   const uint64_t* word_array;
   int word_count;
@@ -141,11 +158,28 @@ typedef struct {
 
 extern void Init();
 extern IsolatePtr NewIsolate();
+extern IsolatePtr NewIsolateWithOptions(IsolateOptions opts);
 extern void IsolatePerformMicrotaskCheckpoint(IsolatePtr ptr);
 extern void IsolateDispose(IsolatePtr ptr);
 extern void IsolateTerminateExecution(IsolatePtr ptr);
 extern int IsolateIsExecutionTerminating(IsolatePtr ptr);
 extern IsolateHStatistics IsolationGetHeapStatistics(IsolatePtr ptr);
+extern void IsolateAddNearHeapLimitCallback(IsolatePtr ptr);
+extern void IsolateRemoveNearHeapLimitCallback(IsolatePtr ptr,
+                                               size_t heap_limit);
+extern void IsolateAutomaticallyRestoreInitialHeapLimit(IsolatePtr ptr,
+                                                         double threshold);
+// IsolateWarmupOldGenerationHeap forces V8 to commit at least target_bytes
+// of old-generation pages by allocating a non-deduplicated retained buffer
+// inside an internal context, then collecting it. With --no-memory-reducer
+// the committed pages are retained for reuse by subsequent allocations.
+//
+// Cost: target_bytes peak working set during the call; subsequent V8
+// allocations up to ~80% of target_bytes do not need to ask the OS for
+// new pages. Returns 0 on success or non-zero on failure (out of memory
+// or script error). See WarmupOldGenerationHeap on the Go side.
+extern int IsolateWarmupOldGenerationHeap(IsolatePtr ptr,
+                                           size_t target_bytes);
 
 extern ValuePtr IsolateThrowException(IsolatePtr iso, ValuePtr value);
 
@@ -204,6 +238,15 @@ extern ValuePtr NewValueUndefined(IsolatePtr iso_ptr);
 extern ValuePtr NewValueInteger(IsolatePtr iso_ptr, int32_t v);
 extern ValuePtr NewValueIntegerFromUnsigned(IsolatePtr iso_ptr, uint32_t v);
 extern RtnValue NewValueString(IsolatePtr iso_ptr, const char* v, int v_length);
+// NewExternalOneByteString creates a V8 String that points directly at
+// caller-owned memory (no copy). pin_id is opaque to v8go; it is passed
+// verbatim to goReleaseExternalString when V8 collects the wrapper.
+// Caller MUST keep the byte range alive until the release callback fires.
+// Data must be ASCII / Latin-1 (one byte per code point).
+extern RtnValue NewExternalOneByteString(IsolatePtr iso_ptr,
+                                          const char* v,
+                                          int v_length,
+                                          uint64_t pin_id);
 extern ValuePtr NewValueBoolean(IsolatePtr iso_ptr, int v);
 extern ValuePtr NewValueNumber(IsolatePtr iso_ptr, double v);
 extern ValuePtr NewValueBigInt(IsolatePtr iso_ptr, int64_t v);

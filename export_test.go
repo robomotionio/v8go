@@ -21,3 +21,12 @@ var GetContext = getContext
 func (c *Context) Ref() int {
 	return c.ref
 }
+
+// LiveExternalStringPins returns the current count of []byte slices pinned
+// behind live external one-byte strings. Exported for testing the lifetime
+// of GoExternalOneByteResource against V8 GC and Isolate::Dispose.
+func LiveExternalStringPins() int {
+	extPinLock.Lock()
+	defer extPinLock.Unlock()
+	return len(extPins)
+}

@@ -154,22 +154,57 @@ void Init() {
   return;
 }
 
-IsolatePtr NewIsolate() {
-  Isolate::CreateParams params;
-  params.array_buffer_allocator = default_allocator;
-  Isolate* iso = Isolate::New(params);
+// finishIsolateInit performs the isolate setup that is shared between
+// NewIsolate and NewIsolateWithOptions: locker / handle scope, capture
+// stack traces, and an internal Context registered as slot 0 data so
+// later cgo entrypoints can recover it via isolateInternalContext.
+static void finishIsolateInit(Isolate* iso) {
   Locker locker(iso);
   Isolate::Scope isolate_scope(iso);
   HandleScope handle_scope(iso);
 
   iso->SetCaptureStackTraceForUncaughtExceptions(true);
 
-  // Create a Context for internal use
   m_ctx* ctx = new m_ctx;
   ctx->ptr.Reset(iso, Context::New(iso));
   ctx->iso = iso;
   iso->SetData(0, ctx);
+}
 
+IsolatePtr NewIsolate() {
+  Isolate::CreateParams params;
+  params.array_buffer_allocator = default_allocator;
+  Isolate* iso = Isolate::New(params);
+  finishIsolateInit(iso);
+  return iso;
+}
+
+// NewIsolateWithOptions surfaces v8::Isolate::CreateParams::constraints so
+// callers can set the initial / max old-generation and max young-generation
+// sizes per isolate. Setting initial_old_space_bytes makes V8 commit the
+// requested size at isolate creation rather than growing on demand — this
+// matters on Windows under memory pressure where peak-time VirtualAlloc
+// can be denied. See docs/v8-windows-oom.md in the deskbot repo.
+//
+// Any opts field set to 0 is left at the V8 default. Existing callers can
+// continue using NewIsolate() with no behavior change.
+IsolatePtr NewIsolateWithOptions(IsolateOptions opts) {
+  Isolate::CreateParams params;
+  params.array_buffer_allocator = default_allocator;
+  if (opts.max_old_space_bytes > 0) {
+    params.constraints.set_max_old_generation_size_in_bytes(
+        opts.max_old_space_bytes);
+  }
+  if (opts.initial_old_space_bytes > 0) {
+    params.constraints.set_initial_old_generation_size_in_bytes(
+        opts.initial_old_space_bytes);
+  }
+  if (opts.max_young_space_bytes > 0) {
+    params.constraints.set_max_young_generation_size_in_bytes(
+        opts.max_young_space_bytes);
+  }
+  Isolate* iso = Isolate::New(params);
+  finishIsolateInit(iso);
   return iso;
 }
 
@@ -197,6 +232,115 @@ void IsolateTerminateExecution(IsolatePtr iso) {
 
 int IsolateIsExecutionTerminating(IsolatePtr iso) {
   return iso->IsExecutionTerminating();
+}
+
+// nearHeapLimitTrampoline is V8's required signature; it forwards to the
+// Go-side callback exported by isolate.go (goNearHeapLimitCallback). The
+// callback may return current_heap_limit unchanged (V8 will then OOM as
+// usual), or a larger value to grow the cap, or a smaller value to allow
+// V8 to restore the limit later.
+size_t nearHeapLimitTrampoline(void* data,
+                                size_t current_heap_limit,
+                                size_t initial_heap_limit) {
+  IsolatePtr iso = static_cast<IsolatePtr>(data);
+  return goNearHeapLimitCallback(iso,
+                                  current_heap_limit,
+                                  initial_heap_limit);
+}
+
+void IsolateAddNearHeapLimitCallback(IsolatePtr iso) {
+  if (iso == nullptr) {
+    return;
+  }
+  // Pass the IsolatePtr as the data so the Go callback can identify which
+  // isolate is firing without us maintaining a separate registry.
+  iso->AddNearHeapLimitCallback(nearHeapLimitTrampoline,
+                                 static_cast<void*>(iso));
+}
+
+void IsolateRemoveNearHeapLimitCallback(IsolatePtr iso, size_t heap_limit) {
+  if (iso == nullptr) {
+    return;
+  }
+  iso->RemoveNearHeapLimitCallback(nearHeapLimitTrampoline, heap_limit);
+}
+
+void IsolateAutomaticallyRestoreInitialHeapLimit(IsolatePtr iso,
+                                                  double threshold) {
+  if (iso == nullptr) {
+    return;
+  }
+  iso->AutomaticallyRestoreInitialHeapLimit(threshold);
+}
+
+// IsolateWarmupOldGenerationHeap forces V8 to commit ~target_bytes of
+// old-generation pages by allocating an Array of distinct one-byte
+// strings totaling that size, then dropping the reference and running
+// LowMemoryNotification (which performs a full Mark-Compact). With
+// --no-memory-reducer set, the freed pages are NOT returned to the OS —
+// they remain available for subsequent allocations.
+//
+// Why distinct strings: V8 deduplicates "X".repeat(N) and similar
+// expressions; without distinct content V8 retains a single underlying
+// String. We build per-iteration content using a counter so each chunk
+// is unique.
+//
+// The work runs on an internal context attached to the isolate (slot 0
+// data), so callers don't need to pass one.
+int IsolateWarmupOldGenerationHeap(IsolatePtr iso, size_t target_bytes) {
+  if (iso == nullptr || target_bytes == 0) {
+    return 0;
+  }
+  ISOLATE_SCOPE_INTERNAL_CONTEXT(iso);
+  Local<Context> local_ctx = ctx->ptr.Get(iso);
+  Context::Scope context_scope(local_ctx);
+  TryCatch try_catch(iso);
+
+  // Each chunk is 1 MiB of unique bytes; total iterations = target / 1MB.
+  // The buffer is built then dropped before the GC, so peak working set
+  // is ~target_bytes plus per-string V8 metadata.
+  //
+  // String construction uses ASCII per-character and Array.from + join
+  // to avoid the O(N^2) trap of `s += ...`. Per-iteration content is
+  // unique (offset by chunk index) so V8's string deduplication does
+  // not collapse the buffer to a single underlying allocation.
+  const size_t kChunkBytes = 1u << 20;  // 1 MiB
+  size_t chunks = (target_bytes + kChunkBytes - 1) / kChunkBytes;
+  std::ostringstream src;
+  src << "(function(){var __wbuf__=[];"
+      << "var __n__=" << kChunkBytes << ";"
+      << "for(var i=0;i<" << chunks << ";i++){"
+      << "var arr=new Array(__n__);"
+      << "var off=(i*7)&0x7F;"
+      << "for(var j=0;j<__n__;j++)arr[j]=String.fromCharCode((j+off)&0x7F);"
+      << "__wbuf__.push(arr.join(''));"
+      << "}"
+      << "__wbuf__=null;"
+      << "})();";
+  std::string code = src.str();
+  Local<String> source;
+  if (!String::NewFromUtf8(iso, code.c_str(), NewStringType::kNormal,
+                           static_cast<int>(code.size()))
+           .ToLocal(&source)) {
+    return 1;
+  }
+  Local<Script> script;
+  if (!Script::Compile(local_ctx, source).ToLocal(&script)) {
+    return 2;
+  }
+  Local<Value> result;
+  if (!script->Run(local_ctx).ToLocal(&result)) {
+    return 3;
+  }
+  // We deliberately do NOT call LowMemoryNotification here. That call
+  // bypasses --no-memory-reducer and decommits the freshly committed
+  // pages back to the OS — defeating the entire warmup. By dropping the
+  // __wbuf__ reference inside the script and letting V8's normal GC
+  // reclaim the strings later, the underlying old-space pages stay in
+  // V8's free list ready for the next allocation. With
+  // --no-memory-reducer set globally, V8 retains those pages between
+  // calls instead of returning them to the OS.
+  return 0;
 }
 
 IsolateHStatistics IsolationGetHeapStatistics(IsolatePtr iso) {
@@ -852,6 +996,65 @@ RtnValue NewValueString(IsolatePtr iso, const char* v, int v_length) {
   Local<String> str;
   if (!String::NewFromUtf8(iso, v, NewStringType::kNormal, v_length)
            .ToLocal(&str)) {
+    rtn.error = ExceptionError(try_catch, iso, ctx->ptr.Get(iso));
+    return rtn;
+  }
+  m_value* val = new m_value;
+  val->id = 0;
+  val->iso = iso;
+  val->ctx = ctx;
+  val->ptr = Global<Value>(iso, str);
+  rtn.value = tracked_value(ctx, val);
+  return rtn;
+}
+
+// GoExternalOneByteResource is the V8 String backing for memory owned by
+// the Go runtime. The class holds only a pointer + length into the Go
+// []byte and a pin id — it does NOT copy the data. The Go side keeps the
+// underlying slice alive (pinned in a process-global map keyed by pin_id)
+// until V8 disposes the resource. V8 calls Dispose() when the wrapping
+// String is collected, which deletes this resource via the default
+// implementation; ~GoExternalOneByteResource then notifies Go through the
+// cgo-exported goReleaseExternalString to drop the pin.
+//
+// Constraints:
+//   - data must point to ASCII / Latin-1 (one byte per code point); V8
+//     reads it as raw one-byte content, no UTF-8 decoding.
+//   - data must not be modified or relocated for the lifetime of the
+//     resource. Go heap allocations are stable (Go GC does not compact),
+//     so as long as the pin keeps a Go reference alive this holds.
+class GoExternalOneByteResource
+    : public String::ExternalOneByteStringResource {
+ public:
+  GoExternalOneByteResource(const char* data, size_t length, uint64_t pin_id)
+      : data_(data), length_(length), pin_id_(pin_id) {}
+  ~GoExternalOneByteResource() override {
+    goReleaseExternalString(pin_id_);
+  }
+  const char* data() const override { return data_; }
+  size_t length() const override { return length_; }
+
+ private:
+  const char* data_;
+  size_t length_;
+  uint64_t pin_id_;
+};
+
+RtnValue NewExternalOneByteString(IsolatePtr iso,
+                                   const char* v,
+                                   int v_length,
+                                   uint64_t pin_id) {
+  ISOLATE_SCOPE_INTERNAL_CONTEXT(iso);
+  TryCatch try_catch(iso);
+  RtnValue rtn = {};
+  // V8 takes ownership of the resource and deletes it via Dispose() when
+  // the wrapping String becomes unreachable. On the failure path V8 has
+  // not taken ownership, so we delete it ourselves.
+  GoExternalOneByteResource* res =
+      new GoExternalOneByteResource(v, static_cast<size_t>(v_length), pin_id);
+  Local<String> str;
+  if (!String::NewExternalOneByte(iso, res).ToLocal(&str)) {
+    delete res;
     rtn.error = ExceptionError(try_catch, iso, ctx->ptr.Get(iso));
     return rtn;
   }
