@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -597,4 +599,116 @@ func (v *Value) SharedArrayBufferGetContents() ([]byte, func(), error) {
 	byte_slice := unsafe.Slice(byte_ptr, byte_size)
 
 	return byte_slice, release, nil
+}
+
+// External one-byte strings — see NewExternalOneByteValue.
+//
+// V8 holds a pointer into caller-owned memory rather than copying the
+// string contents into the V8 heap. Lifetime: the Go runtime cannot know
+// that V8 still references the slice, so we keep a Go-side reference in
+// the extPins map keyed by an opaque uint64. The C++ resource destructor
+// (~GoExternalOneByteResource in v8go.cc) calls back into Go via
+// goReleaseExternalString to drop the pin when V8 disposes the wrapper.
+//
+// The pin is process-global rather than per-Isolate because v8go's value
+// lifetime is also process-global from Go's perspective (the destructor
+// fires from V8's GC, which we don't synchronously control). The map's
+// entries are small (one slice header per live external string) and are
+// removed promptly when V8 collects the wrapper.
+var (
+	extPinSeq  uint64
+	extPinLock sync.Mutex
+	extPins    = make(map[uint64][]byte)
+)
+
+// IsOneByteSafe reports whether every byte in b is <= 0x7F (plain ASCII).
+// Callers MUST verify this before NewExternalOneByteValue, because V8
+// reads external one-byte strings as raw Latin-1 — passing UTF-8 multibyte
+// sequences would silently corrupt JS string content.
+//
+// Implementation uses an 8-byte SWAR scan: any high bit set in the word
+// short-circuits to false. ~6 GB/s on modern x86, so it's cheap relative
+// to the cost it avoids (the cgo string copy + V8 SeqString allocation).
+func IsOneByteSafe(b []byte) bool {
+	const hiMask = uint64(0x8080808080808080)
+	i := 0
+	for ; i+8 <= len(b); i += 8 {
+		w := uint64(b[i]) |
+			uint64(b[i+1])<<8 |
+			uint64(b[i+2])<<16 |
+			uint64(b[i+3])<<24 |
+			uint64(b[i+4])<<32 |
+			uint64(b[i+5])<<40 |
+			uint64(b[i+6])<<48 |
+			uint64(b[i+7])<<56
+		if w&hiMask != 0 {
+			return false
+		}
+	}
+	for ; i < len(b); i++ {
+		if b[i] > 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+// NewExternalOneByteValue creates a V8 String backed by the caller's Go
+// memory — no copy is made. V8 keeps a pointer into the slice for the
+// lifetime of the resulting JS String. The slice is pinned in a process-
+// global map; the pin is released when V8 disposes the resource (typically
+// during a later GC or at Isolate::Dispose).
+//
+// The slice MUST contain only one-byte content (ASCII or Latin-1); use
+// IsOneByteSafe to check first. Passing UTF-8 multibyte sequences here
+// will produce a JS String whose code units do not match the original
+// text — silent corruption.
+//
+// Why use this: avoiding the Go-string + C.CString + V8 SeqString triple
+// copy collapses ~3-4× peak memory pressure for large inputs to ~1×.
+// On Windows under commit pressure this can be the difference between
+// "passes" and "Fatal JavaScript out of memory: CALL_AND_RETRY_LAST".
+// See docs/v8-windows-oom.md in the deskbot repo.
+//
+// Note: callers should hold the slice in a local variable (not pass a
+// short-lived expression) to avoid the slice header being collected
+// before the C call returns.
+func NewExternalOneByteValue(iso *Isolate, data []byte) (*Value, error) {
+	if iso == nil {
+		return nil, errors.New("v8go: NewExternalOneByteValue: Isolate cannot be <nil>")
+	}
+	if len(data) == 0 {
+		return NewValue(iso, "")
+	}
+	pin := atomic.AddUint64(&extPinSeq, 1)
+	extPinLock.Lock()
+	extPins[pin] = data
+	extPinLock.Unlock()
+	rtn := C.NewExternalOneByteString(
+		iso.ptr,
+		(*C.char)(unsafe.Pointer(&data[0])),
+		C.int(len(data)),
+		C.uint64_t(pin))
+	v, err := valueResult(nil, rtn)
+	if err != nil {
+		// The C++ side already deleted the resource on failure (it never
+		// reached V8), so the destructor will not fire — release the pin
+		// here ourselves.
+		extPinLock.Lock()
+		delete(extPins, pin)
+		extPinLock.Unlock()
+		return nil, err
+	}
+	return v, nil
+}
+
+// goReleaseExternalString is invoked from v8go.cc by the C++ destructor
+// of GoExternalOneByteResource when V8 collects the wrapping String.
+// Removes the pin so the underlying []byte can be reclaimed by Go GC.
+//
+//export goReleaseExternalString
+func goReleaseExternalString(pinID C.uint64_t) {
+	extPinLock.Lock()
+	delete(extPins, uint64(pinID))
+	extPinLock.Unlock()
 }
