@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 0 * * *' # Run every day
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
     upgrade:
         name: Upgrade V8
