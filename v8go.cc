@@ -643,6 +643,14 @@ static void FunctionTemplateCallback(const FunctionCallbackInfo<Value>& info) {
   int ctx_ref = local_ctx->GetEmbedderData(1).As<Integer>()->Value();
   m_ctx* ctx = goContext(ctx_ref);
 
+  // Values made with NewValue are tracked against the isolate's internal
+  // context. Record its current high-water mark so we can distinguish a
+  // temporary return value created by this callback from a value that the
+  // caller created earlier and may return more than once (including the
+  // isolate's cached Null and Undefined values).
+  m_ctx* internal_ctx = isolateInternalContext(iso);
+  long internal_value_watermark = internal_ctx->nextValId;
+
   int callback_ref = info.Data().As<Integer>()->Value();
 
   m_value* _this = new m_value;
@@ -684,9 +692,12 @@ static void FunctionTemplateCallback(const FunctionCallbackInfo<Value>& info) {
     // msgbridge) turns that into unbounded, un-GC-able heap growth and a
     // "last resort GC frees 0 bytes" CALL_AND_RETRY_LAST OOM.
     //
-    // Guard: a callback may legitimately return `this` or one of its args,
-    // which are tracked in the *current* (per-call) context and freed at its
-    // Close. Deleting one here would double-free. Skip those by identity.
+    // A callback may legitimately return `this`, one of its args, a value
+    // obtained from its Context, or a previously-created reusable value.
+    // Deleting any of those here either double-frees it or leaves the Go
+    // *Value pointing at freed memory. Only consume a NewValue result that
+    // was allocated against the isolate's internal context after this
+    // callback began.
     bool aliasesThisOrArg = false;
     for (int i = 0; i <= args_count; i++) {
       if (thisAndArgs[i] == val) {
@@ -694,10 +705,10 @@ static void FunctionTemplateCallback(const FunctionCallbackInfo<Value>& info) {
         break;
       }
     }
-    if (!aliasesThisOrArg) {
-      if (val->id != 0 && val->ctx != nullptr) {
-        val->ctx->vals.erase(val->id);
-      }
+    bool createdForThisCallback = val->ctx == internal_ctx &&
+                                  val->id > internal_value_watermark;
+    if (!aliasesThisOrArg && createdForThisCallback) {
+      val->ctx->vals.erase(val->id);
       val->ptr.Reset();
       delete val;
     }

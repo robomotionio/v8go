@@ -64,3 +64,42 @@ func TestFunctionTemplateReturnValueNotLeaked(t *testing.T) {
 			"internal context", delta, N)
 	}
 }
+
+func TestFunctionTemplateReusableReturnValues(t *testing.T) {
+	t.Parallel()
+
+	iso := v8.NewIsolate()
+	defer iso.Dispose()
+
+	cached, err := v8.NewValue(iso, "cached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := v8.NewObjectTemplate(iso)
+	global.Set("cached", v8.NewFunctionTemplate(iso, func(*v8.FunctionCallbackInfo) *v8.Value {
+		return cached
+	}))
+	global.Set("nullValue", v8.NewFunctionTemplate(iso, func(*v8.FunctionCallbackInfo) *v8.Value {
+		return v8.Null(iso)
+	}))
+	global.Set("undefinedValue", v8.NewFunctionTemplate(iso, func(*v8.FunctionCallbackInfo) *v8.Value {
+		return v8.Undefined(iso)
+	}))
+
+	ctx := v8.NewContext(iso, global)
+	defer ctx.Close()
+	result, err := ctx.RunScript(`
+		for (let i = 0; i < 2000; i++) {
+			if (cached() !== "cached") throw new Error("cached value changed");
+			if (nullValue() !== null) throw new Error("null value changed");
+			if (undefinedValue() !== undefined) throw new Error("undefined value changed");
+		}
+		42
+	`, "reusable-return-values.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Integer(); got != 42 {
+		t.Fatalf("result = %d, want 42", got)
+	}
+}
